@@ -116,7 +116,7 @@ To calculate selectivity and distance metrics:
 ```cpp
 computeSelectivityAndDistance();
 ```
----
+--
 
 ## ✉️ Questions or Queries
 
