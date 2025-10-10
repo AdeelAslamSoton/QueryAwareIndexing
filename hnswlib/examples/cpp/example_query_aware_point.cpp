@@ -1,9 +1,9 @@
 #include "../../hnswlib/hnswlib.h"
 #include "../../query_aware_hnsw/query_aware_hnswlib.h"
-#include "../../query_aware_hnsw/query_aware_range_filter_hnswlib.h"
 #include <thread>
 #include <algorithm>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -15,16 +15,10 @@
 #include "query_aware_hnsw/linear_regression.h"
 using namespace std;
 pair<vector<vector<float>>, vector<string>> reading_files(const string &file_path, int &dim, bool queries);
-pair<vector<vector<float>>, vector<pair<int, int>>> reading_files_range(const string &file_path, int &dim);
-vector<int> reading_files_attributes(const string &file_path, std::map<int, pair<float, float>> &mapWithBins);
-
-vector<std::string> reading_files_attributes_point(const string &file_path);
+vector<std::string> reading_files_attributes(const string &file_path);
 vector<string> splitString(const string &str, char delimiter);
 vector<float> splitToFloat(const string &str, char delimiter);
-void writeSelectivityCSVRange(const std::vector<std::pair<int, int>> &attributes,
-                              const std::vector<int> &meta_data_attributes,
-                              const std::string &filename);
-vector<int> findBinsForRange(int &query_left, int &query_right, std::map<int, pair<float, float>> &mapWithBin);
+
 bool isNullOrEmpty(const string &str);
 // Compute the selectivity and write it in a file
 void writeSelectivityCSV(const std::vector<std::string> &attributes,
@@ -61,6 +55,9 @@ void writeSelectivityCSV(const std::vector<std::string> &attributes,
     csv_file.close();
 }
 // It loads the groundtruth files id
+
+std::unordered_map<std::string, std::string> reading_constants(std::string &path);
+
 std::map<int, std::unordered_set<int>> groundTruthIds(const std::string &folder, int topK = 10)
 {
     std::map<int, std::unordered_set<int>> groundtruth_map;
@@ -189,6 +186,22 @@ std::vector<char> loadFilterMap(
     return buffer;
 }
 
+// Compute the selectivity
+
+void create_directory_if_not_exists(const std::string &path)
+{
+    if (mkdir(path.c_str(), 0777) == -1)
+    {
+        if (errno == EEXIST)
+        {
+            // Directory already exists, that's fine
+        }
+        else
+        {
+            std::cerr << "Error creating directory: " << path << std::endl;
+        }
+    }
+}
 // Multithreaded executor
 // The helper function copied from python_bindings/bindings.cpp (and that itself is copied from nmslib)
 // An alternative is using #pragme omp parallel for or any other C++ threading
@@ -255,24 +268,56 @@ inline void ParallelFor(size_t start, size_t end, size_t numThreads, Function fn
     }
 }
 
-int main()
+void computeSelectivityAndDistance()
 {
 
-    int dim = 768; // Dimension of the elements
+    std::string constant_path = "../examples/cpp/Selectivity_distance.txt";
+    std::unordered_map<std::string, std::string> constants = reading_constants(constant_path);
 
-    int M = 16;                // Tightly connected with internal dimensionality of the data
-                               // strongly affects the memory consumption
-    int ef_construction = 400; // Controls index search speed/build speed tradeoff
-    int num_threads = 40;      // Number of threads for operations with index
+    int dim = std::stoi(constants["DIM"]);
+    std::map<int, std::unordered_set<int>> gts_ids = groundTruthIds(constants["GROUND_TRUTH_FOLDER"], 10);
+    vector<std::string> meta_data_attributes = reading_files_attributes(constants["META_DATA_PATH"]);
+    // Reading file for queries
+    pair<vector<vector<float>>, vector<string>> queries = reading_files(constants["QUERIES_PATH"], dim, true);
+    size_t elements = meta_data_attributes.size();
 
-    bool cluster_read_write = true;
-    bool read_index = false;
+    writeSelectivityCSV(queries.second,
+                        meta_data_attributes,
+                       constants["SELECTIVITY"]);
+    hnswlib::L2Space space(dim);
+    qwery_aware::QweryAwareHNSW<float> *alg_query_aware = new qwery_aware::QweryAwareHNSW<float>(&space, elements);
+    std::cout << "Index Loaded  " << elements << std::endl;
+    alg_query_aware->loadIndex(constants["INDEX_PATH"], &space);
+    std::cout << "Index Loaded  " << elements << std::endl;
+
+    alg_query_aware->compute_distance_for_queries(queries.first, elements, constants["DISTANCE"]);
+}
+
+int main()
+{
+    // computeSelectivityAndDistance();
+    // exit(-1);
+    std::string constant_path = "../examples/cpp/constants_and_filepaths.txt";
+    std::unordered_map<std::string, std::string> constants = reading_constants(constant_path);
+
+    int dim = std::stoi(constants["DIM"]);
+    // Dimension of the elements
+
+    int M = std::stoi(constants["M"]);
+    // Tightly connected with internal dimensionality of the data
+    // strongly affects the memory consumption
+    int ef_construction = std::stoi(constants["EFC"]);
+    // Controls index search speed/build speed tradeoff
+    int num_threads = 40; // Number of threads for operations with index
+
+    bool read_index = false; // For True if you have already index it is only for construction of index
     hnswlib::L2Space space(dim);
 
     if (read_index)
     {
         std::cout << "Start" << std::endl;
-        auto [embeddings, string_ids] = reading_files("/data4/hnsw/TripClick/documents_full.csv", dim, false);
+
+        auto [embeddings, string_ids] = reading_files(constants["DATASET_FILE"], dim, false);
         int max_elements = embeddings.size();
 
         // Map int -> string IDs
@@ -291,41 +336,27 @@ int main()
         // Build HNSW index
         ParallelFor(0, max_elements, 40, [&](size_t row, size_t threadId)
                     { alg_query_aware->addPoint((void *)(data + dim * row), (int)row); });
-        alg_query_aware->saveIndex("/data3/Adeel/Point_queries/ACORN-GAMMA/Index/index.bin");
+        alg_query_aware->saveIndex(constants["INDEX_PATH"]);
         delete[] data;
         delete alg_query_aware;
     }
     else
     {
 
-        std::map<int, std::unordered_set<int>> gts_ids = groundTruthIds("/data3/Adeel/Query_aware_range/YoutubeAudioLike/GT", 10);
-        std::map<int, pair<float, float>> mapWithBin;
+        std::map<int, std::unordered_set<int>> gts_ids = groundTruthIds(constants["GROUND_TRUTH_FOLDER"], 10);
 
-        vector<int> meta_data_attributes = reading_files_attributes("/data4/hnsw/yt8m/Youtube_Audio_View.csv", mapWithBin);
-        std::cout << "Total bins" << mapWithBin.size() << std::endl;
+        vector<std::string> meta_data_attributes = reading_files_attributes(constants["META_DATA_PATH"]);
 
-         vector<std::string> meta_data_attributes_point = reading_files_attributes_point("/data4/hnsw/TripClick/documents_full.csv");
+        // Reading file for queries
+        pair<vector<vector<float>>, vector<string>> queries = reading_files(constants["QUERIES_PATH"], dim, true);
 
-        pair<vector<vector<float>>, vector<pair<int, int>>> queries_range = reading_files_range("/data4/hnsw/yt8m/queries_views_range.csv", dim);
+        size_t elements = meta_data_attributes.size();
 
-        pair<vector<vector<float>>, vector<string>> queries = reading_files("/data3/Adeel/Point_queries/UNG/queries_TRIP_CLICK.csv", dim, true);
+        std::vector<std::pair<float, float>> avg_dis_selectivity = readDistanceSelectivity(constants["DISTANCE_SELECTIVITY"]);
 
-        size_t elements = meta_data_attributes_point.size();
-
-        //   writeSelectivityCSVRange(queries_range.second,
-        //                  meta_data_attributes,
-        //                  "/data3/Adeel/Query_aware_range/YoutubeAudioLike/QueryAware/Selectivity/Selectivity.csv");
-        //                  exit(0);
-
-        // writeSelectivityCSV(queries.second,
-        //                  meta_data_attributes,
-        //                  "/data3/Adeel/YoutubeQweryAware/Selectivity/Selectivity.csv");
-        //                  exit(0);
-        std::vector<std::pair<float, float>> avg_dis_selectivity = readDistanceSelectivity("/data3/Adeel/Query_aware_range/YoutubeAudioLike/QueryAware/Selectivity/Distance_Selectivity.csv");
-        
-        qwery_aware::QweryAwareHNSWRange<float> *alg_query_aware = new qwery_aware::QweryAwareHNSWRange<float>(&space, elements, gts_ids, avg_dis_selectivity, &mapWithBin);
-        
-        alg_query_aware->loadIndex("/data3/Adeel/Point_queries/ACORN-GAMMA/Index/index.bin", &space);
+        qwery_aware::QweryAwareHNSW<float> *alg_query_aware = new qwery_aware::QweryAwareHNSW<float>(&space, elements, gts_ids, avg_dis_selectivity, constants);
+        std::cout << "Index Loaded  " << elements << std::endl;
+        alg_query_aware->loadIndex(constants["INDEX_PATH"], &space);
         std::cout << "Index Loaded  " << elements << std::endl;
         // Searching
 
@@ -346,24 +377,11 @@ int main()
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
         size_t total_elements = alg_query_aware->max_elements_;
-        size_t batch_size = 2000;
+        size_t batch_size = 1000;
 
         size_t num_batches = (queries.first.size() + batch_size - 1) / batch_size;
         int counter = 0;
- 
-        vector<vector<int>> queries_bin;
-        for (int i = 0; i < queries_range.first.size(); i++)
-        {
-            std::pair<int, int> attributes = queries_range.second[i];
-            int l = std::min(attributes.first, attributes.second);
-            int r = std::max(attributes.first, attributes.second);
 
-            vector<int> bins = findBinsForRange(l, r, mapWithBin);
-            queries_bin.push_back(bins); // just store bins
-        }
-
-        alg_query_aware->bst_initialization(mapWithBin);
-        
         for (size_t b = 0; b < num_batches; b++)
         {
 
@@ -373,8 +391,9 @@ int main()
 
             std::cout << "Processing batch " << (b + 1) << "/" << num_batches
                       << " (queries " << start << " to " << end - 1 << ")" << std::endl;
-            std::string filter_file = "/data3/Adeel/Point_queries/FilterMap/filter_batch_" + std::to_string(start) + ".bin";
-           
+            create_directory_if_not_exists(constants["FILTER_PATH"]);
+            std::string filter_file = constants["FILTER_PATH"] + "/filter_batch_" + std::to_string(start) + ".bin";
+
             std::vector<char> filter_ids_map;
 
             if (fileExists(filter_file))
@@ -389,41 +408,20 @@ int main()
                 std::cout << "💾 Saving " << start << " to cache" << std::endl;
                 filter_ids_map.resize((end - start) * total_elements);
 
-                    for (size_t i = start; i < end; i++)
-                    {
-                        const std::string &attribute = queries.second[i];
+                for (size_t i = start; i < end; i++)
+                {
+                    const std::string &attribute = queries.second[i];
 
-                        ParallelFor(0, alg_query_aware->max_elements_, 40, [&](size_t row, size_t threadId)
-                                    {
+                    ParallelFor(0, alg_query_aware->max_elements_, 40, [&](size_t row, size_t threadId)
+                                {
                     if (row >= meta_data_attributes.size()) {
                         std::cerr << "⚠️ meta_data_attributes size exceeded for row " << row << std::endl;
                         return;
                     }
-                    bool match_found = (attribute == meta_data_attributes_point[row]);
+                    bool match_found = (attribute == meta_data_attributes[row]);
                    //  (attribute >= meta_data_attributes[row]);
                     filter_ids_map[(i - start) * total_elements + row] = match_found; });
-                    }
-
-                // for (size_t i = start; i < end; i++)
-                // {
-                //     const auto &range = queries_range.second[i]; // pair<int,int>
-                //     int left = range.first;
-                //     int right = range.second;
-
-                //     ParallelFor(0, alg_query_aware->max_elements_, 40, [&](size_t row, size_t threadId)
-                //                 {
-                //         if (row >= meta_data_attributes.size()) {
-                //             std::cerr << "⚠️ meta_data_attributes size exceeded for row " << row << std::endl;
-                //             return;
-                //         }
-                //           int value = meta_data_attributes[row];  // assuming meta_data_attributes holds int values
-                //           int l = std::min(left, right);
-                //           int r = std::max(left, right);
-                          
-                //             bool match_found = (value >= l && value <= r);
-                                   
-                //             filter_ids_map[(i - start) * total_elements + row] = match_found; });
-                // }
+                }
 
                 saveFilterMap(filter_ids_map, filter_file);
                 std::cout << "💾 Saved filter map for batch " << b + 1 << " to cache" << std::endl;
@@ -432,7 +430,7 @@ int main()
 
             // Step 2: Apply predicate filter
             alg_query_aware->predicateCondition(filter_ids_map.data());
-           
+
             for (size_t i = 0; i < efs_array.size(); i++)
             {
                 alg_query_aware->setEf(efs_array[i]);
@@ -440,40 +438,19 @@ int main()
                 // loop
                 ParallelFor(0, end - start, 1, [&](size_t row_batch, size_t threadId)
                             {
-                               
                                 size_t global_query_index = start + row_batch;
                                 const std::vector<float> &emb = queries.first[global_query_index];
-                                // std::pair<int, int> attributes = queries_range.second[global_query_index];
-                                // int left = attributes.first;
-                                // int right = attributes.second;
-
-                                // // normalize (min/max) in case left > right
-                                // int l = std::min(left, right);
-                                // int r = std::max(left, right);
-                                // const std::string &attribute = queries.second[global_query_index];
-                                //  float random_score = dist(gen);
-
-                                // Batch-safe groundTruth
-                                // size_t batch_start
 
                                 std::vector<float> new_query_reg = {avg_dis_selectivity[start + row_batch].first,
                                                                     avg_dis_selectivity[start + row_batch].second};
 
                                 float score = models[i]->predict(new_query_reg);
 
-                                // std::cout<<"Score"<<score<<endl;
-                                // double predicted_recall = model.predict(new_query);
-                                // float score = dist(gen);
-                                // alg_query_aware->search_parallel(emb, k, attribute, score, row_batch, start, models[i].get());
+                                alg_query_aware->search(emb, k, queries.second[global_query_index], score, row_batch, start, models[i].get());
 
-                         // alg_query_aware->search(emb, k, queries_bin[row_batch], score, row_batch, start, models[i].get());
-
-                                alg_query_aware->groundTruthBatch(emb.data(), k, row_batch,
-                                                                  filter_ids_map.data(), total_elements,
-                                                                  b, start);
-
-                                // alg_query_aware-> handleColdStartInsertion(emb,  k, score, row_batch, start, nullptr, attribute, models[i].get());
-                               //alg_query_aware-> handleColdStartInsertion(emb,  k, score, row_batch, start, queries_bin[row_batch], models[i].get());
+                                // alg_query_aware->groundTruthBatch(emb.data(), k, row_batch,
+                                //                                   filter_ids_map.data(), total_elements,
+                                //                                   b, start);
                             });
                 auto t2 = std::chrono::high_resolution_clock::now();
                 auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
@@ -481,15 +458,13 @@ int main()
                 std::cout << "Finished batch " << start
                           << " EFS: " << efs_array[i]
                           << " | Time: " << duration_ms << " ms" << std::endl;
-                // delete model;
-                // exit(-1);
-               break;
             }
-            //  break; // For only 1000 queries
         }
 
         // Final cleanup
+        
         delete alg_query_aware;
+
     }
 }
 
@@ -504,96 +479,29 @@ pair<vector<vector<float>>, vector<string>> reading_files(const string &file_pat
     while (getline(file, line))
     {
         stringstream ss(line);
-        // string orignal_index, date_created, clinical_area, embedding, attribute;
-        string id, video, audio, genre, publicationdate, right, left;
+
+        string embedding, attribute;
         if (!queries)
         {
-             getline(ss, id, ';');
-            getline(ss, video, ';');
-            getline(ss, audio, ';');
-            // getline(ss, genre, ';');
-            //  getline(ss, publicationdate, ';');
-            getline(ss, right, ';');
-            getline(ss, left, ';');
+            getline(ss, embedding, ';');
+            getline(ss, attribute, ';');
         }
         else
         {
-             getline(ss, id, ';');
-            getline(ss, video, ';');
-            getline(ss, audio, ';');
-            // getline(ss, genre, ';');
-            //  getline(ss, publicationdate, ';');
-            getline(ss, right, ';');
-            getline(ss, left, ';');
+            getline(ss, embedding, ';');
+            getline(ss, attribute, ';');
         }
-        if (!isNullOrEmpty(audio))
+        if (!isNullOrEmpty(embedding))
         {
-            vector<float> embeddingVector = splitToFloat(audio, ',');
+            vector<float> embeddingVector = splitToFloat(embedding, ',');
             if (embeddingVector.size() == dim)
             {
                 total_embeddings.push_back(embeddingVector);
-                attributes.push_back(video); // store string ID
+                attributes.push_back(attribute); // store string ID
             }
         }
     }
     return {total_embeddings, attributes};
-}
-// Read the file for range queries
-pair<vector<vector<float>>, vector<pair<int, int>>> reading_files_range(const string &file_path, int &dim)
-{
-    ifstream file(file_path);
-    vector<vector<float>> total_embeddings;
-    vector<pair<int, int>> attributes; // store left/right ranges as integers
-    string line;
-    getline(file, line); // skip header
-
-    while (getline(file, line))
-    {
-        stringstream ss(line);
-        string id, video, audio, genre, publicationdate, right, left;
-
-        getline(ss, id, ';');
-        getline(ss, video, ';');
-        getline(ss, audio, ';');
-        getline(ss, left, ';');
-        getline(ss, right, ';');
-
-        if (!isNullOrEmpty(audio))
-        {
-            vector<float> embeddingVector = splitToFloat(audio, ',');
-            if (embeddingVector.size() == dim)
-            {
-                total_embeddings.push_back(embeddingVector);
-
-                // convert left/right strings into integers safely
-                int l = 0, r = 0;
-                try
-                {
-                    l = stoi(left);
-                    r = stoi(right);
-                }
-                catch (...)
-                {
-                    // if stoi fails, leave them as 0 or handle error
-                }
-
-                attributes.emplace_back(l, r);
-            }
-        }
-    }
-    return {total_embeddings, attributes};
-}
-
-vector<string> splitString(const string &str, char delimiter)
-{
-    vector<string> tokens;
-    string token;
-    istringstream tokenStream(str);
-    while (getline(tokenStream, token, delimiter))
-    {
-        tokens.push_back(token); //
-    }
-    return tokens;
 }
 
 // Also make sure to remove the memory address occupied by char *after insertion.
@@ -625,60 +533,7 @@ bool isNullOrEmpty(const string &str)
 }
 
 // Read embeddings from CSV-like file
-vector<int> reading_files_attributes(const string &file_path, std::map<int, pair<float, float>> &mapWithBins)
-{
-    ifstream file(file_path);
-    vector<int> attributes;
-    string line;
-
-    // Skip header
-    getline(file, line);
-
-    while (getline(file, line))
-    {
-        stringstream ss(line);
-        string id, video, audio, genreStr, publicationdate, viewsStr, likesStr, binNumberStr, rangebinStr, binNumberLike, binRangeLike;
-
-        // Read required columns
-        getline(ss, video, ';');
-        getline(ss, viewsStr, ';'); // your attribute column (int)
-        getline(ss, likesStr, ';');
-        // getline(ss, binNumberStr, ';');  // bin number
-        // getline(ss, rangebinStr, ';');   // range like "0,10"
-        getline(ss, binNumberLike, ';'); // bin number
-        getline(ss, binRangeLike, ';');  // range like "0,10"
-
-        // Convert attribute to int
-        int attribute = stoi(likesStr);
-        attributes.push_back(attribute);
-
-        // Convert binNumber to int
-        int binNumber = stoi(binNumberLike);
-     
-
-        binRangeLike.erase(remove(binRangeLike.begin(), binRangeLike.end(), '['), binRangeLike.end());
-        binRangeLike.erase(remove(binRangeLike.begin(), binRangeLike.end(), ']'), binRangeLike.end());
-        binRangeLike.erase(remove(binRangeLike.begin(), binRangeLike.end(), '('), binRangeLike.end()); // add this
-        binRangeLike.erase(remove(binRangeLike.begin(), binRangeLike.end(), ')'), binRangeLike.end());
-        binRangeLike.erase(remove(binRangeLike.begin(), binRangeLike.end(), ' '), binRangeLike.end());
-
-        // Split rangebin by comma and convert to floats
-        size_t commaPos = binRangeLike.find(',');
-        if (commaPos != string::npos)
-        {
-                  
-            float left = stof(binRangeLike.substr(0, commaPos));
-            float right = stof(binRangeLike.substr(commaPos + 1));
-
-            mapWithBins[binNumber] = make_pair(left, right);
-        }
-    }
-
-    return attributes;
-}
-
-
-vector<std::string> reading_files_attributes_point(const string &file_path)
+vector<std::string> reading_files_attributes(const string &file_path)
 {
     ifstream file(file_path);
     vector<std::string> attributes;
@@ -690,79 +545,37 @@ vector<std::string> reading_files_attributes_point(const string &file_path)
     while (getline(file, line))
     {
         stringstream ss(line);
-        string id, video, audio, genreStr, publicationdate, viewsStr, likesStr, binNumberStr, rangebinStr, binNumberLike, binRangeLike;
+        string id, embedding, attribute; // audio, genreStr, publicationdate, viewsStr, likesStr, binNumberStr, rangebinStr, binNumberLike, binRangeLike;
 
         // Read required columns
-        getline(ss, video, ';');
-        getline(ss, viewsStr, ';'); // your attribute column (int)
-        getline(ss, likesStr, ';');
-        // getline(ss, binNumberStr, ';');  // bin number
-        // getline(ss, rangebinStr, ';');   // range like "0,10"
-        getline(ss, binNumberLike, ';'); // bin number
-        getline(ss, binRangeLike, ';');  // range like "0,10"
-
-        // Convert attribute to int
-       
-        attributes.push_back(viewsStr);
-
-        
+        getline(ss, embedding, ';');
+        getline(ss, attribute, ';');
+        attributes.push_back(attribute);
     }
 
     return attributes;
 }
 
-void writeSelectivityCSVRange(const std::vector<std::pair<int, int>> &attributes,
-                              const std::vector<int> &meta_data_attributes,
-                              const std::string &filename)
+// Define a variant to hold different types
+std::unordered_map<std::string, std::string> reading_constants(std::string &path)
 {
-    std::ofstream csv_file(filename);
-    if (!csv_file.is_open())
+    std::unordered_map<std::string, std::string> constants; // Store values as strings
+    std::ifstream file(path);
+
+    if (!file)
     {
-        std::cerr << "Error: could not open file for writing\n";
-        return;
+        std::cerr << "Error opening file!" << std::endl;
+        return constants;
     }
 
-    csv_file << "Index,Selectivity\n"; // CSV header
+    std::string key, value;
 
-    for (size_t i = 0; i < attributes.size(); ++i)
+    while (file >> key >> value)
     {
-        int left = attributes[i].first;
-        int right = attributes[i].second;
-
-        // normalize (min/max) in case left > right
-        int l = std::min(left, right);
-        int r = std::max(left, right);
-
-        int counter = 0;
-
-        for (const auto &meta_attr : meta_data_attributes)
-        {
-            if (meta_attr >= l && meta_attr <= r)
-            {
-                counter++;
-            }
-        }
-
-        csv_file << i << "," << counter << "\n";
+        constants[key] = value;
     }
 
-    csv_file.close();
-}
+    file.close();
 
-// reading attrinbues
-vector<int> findBinsForRange(int &query_left, int &query_right, std::map<int, pair<float, float>> &mapWithBin)
-{
-    vector<int> bins;
-    for (const auto &entry : mapWithBin)
-    {
-        int bin_left = entry.second.first;
-        int bin_right = entry.second.second;
-
-        // Check for overlap
-        if (query_right > bin_left && query_left < bin_right)
-        {
-            bins.push_back(entry.first);
-        }
-    }
-    return bins;
+    return constants;
 }

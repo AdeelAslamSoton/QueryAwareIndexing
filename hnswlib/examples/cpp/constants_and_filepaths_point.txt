@@ -1,0 +1,11 @@
+DIM 1024
+M 64
+EFC 400
+INDEX_PATH /data3/Adeel/Testing/index.bin
+META_DATA_PATH /data4/hnsw/beir/beir_docs.csv
+QUERIES_PATH /data4/hnsw/beir/beir_queries.csv
+RESULT_FOLDER /data4/hnsw/TripClick/REsultTestingQweryAware/
+DATASET_FILE /data4/hnsw/TripClick/documents_full.csv
+GROUND_TRUTH_FOLDER /data3/Adeel/BEIRQweryAware/GT
+DISTANCE_SELECTIVITY /data3/Adeel/BEIRQweryAware/Selectivity/Distance_Selectivity.csv
+FILTER_PATH /data3/Adeel/BEIRQweryAware/FilterRes/

@@ -60,52 +60,7 @@ if(HNSWLIB_EXAMPLES)
     # examples
     add_executable(example_query_aware_point examples/cpp/example_query_aware_point.cpp)
     target_link_libraries(example_query_aware_point hnswlib)
-    add_executable(example_search examples/cpp/example_search.cpp)
-    target_link_libraries(example_search hnswlib)
-
-    add_executable(example_epsilon_search examples/cpp/example_epsilon_search.cpp)
-    target_link_libraries(example_epsilon_search hnswlib)
-
-    add_executable(example_multivector_search examples/cpp/example_multivector_search.cpp)
-    target_link_libraries(example_multivector_search hnswlib)
-
-    add_executable(example_filter examples/cpp/example_filter.cpp)
-    target_link_libraries(example_filter hnswlib)
-
-    add_executable(example_replace_deleted examples/cpp/example_replace_deleted.cpp)
-    target_link_libraries(example_replace_deleted hnswlib)
-
-    add_executable(example_mt_search examples/cpp/example_mt_search.cpp)
-    target_link_libraries(example_mt_search hnswlib)
-
-    add_executable(example_mt_filter examples/cpp/example_mt_filter.cpp)
-    target_link_libraries(example_mt_filter hnswlib)
-
-    add_executable(example_mt_replace_deleted examples/cpp/example_mt_replace_deleted.cpp)
-    target_link_libraries(example_mt_replace_deleted hnswlib)
-
-    # tests
-    add_executable(multivector_search_test tests/cpp/multivector_search_test.cpp)
-    target_link_libraries(multivector_search_test hnswlib)
-
-    add_executable(epsilon_search_test tests/cpp/epsilon_search_test.cpp)
-    target_link_libraries(epsilon_search_test hnswlib)
-
-    add_executable(test_updates tests/cpp/updates_test.cpp)
-    target_link_libraries(test_updates hnswlib)
-
-    add_executable(searchKnnCloserFirst_test tests/cpp/searchKnnCloserFirst_test.cpp)
-    target_link_libraries(searchKnnCloserFirst_test hnswlib)
-
-    add_executable(searchKnnWithFilter_test tests/cpp/searchKnnWithFilter_test.cpp)
-    target_link_libraries(searchKnnWithFilter_test hnswlib)
-
-    add_executable(multiThreadLoad_test tests/cpp/multiThreadLoad_test.cpp)
-    target_link_libraries(multiThreadLoad_test hnswlib)
-
-    add_executable(multiThread_replace_test tests/cpp/multiThread_replace_test.cpp)
-    target_link_libraries(multiThread_replace_test hnswlib)
-
-    add_executable(main tests/cpp/main.cpp tests/cpp/sift_1b.cpp)
-    target_link_libraries(main hnswlib)
+    add_executable(example_query_aware_range examples/cpp/example_query_aware_range.cpp)
+    target_link_libraries(example_query_aware_range hnswlib)
+    
 endif()

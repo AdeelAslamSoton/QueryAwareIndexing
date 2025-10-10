@@ -51,12 +51,13 @@ namespace qwery_aware
         std::map<int, std::unordered_set<int>> gts_ids; //= groundTruthIds("/data4/hnsw/TripClick/QueriesForQueriesAware/GroundTruth/", 10);
 
         std::vector<std::pair<float, float>> avg_dis_selectivity; //= readDistanceSelectivity("/data4/hnsw/TripClick/QueriesForQueriesAware/Selectivity/distance_selectivity_.csv");
-        LinearRegression *linear_regression;
+
+        std::unordered_map<std::string, std::string> constants;
 
     public:
         // Constructor: initialize both parent and child with maximum element
         QweryAwareHNSW(hnswlib::SpaceInterface<dist_t> *space,
-                       size_t max_elements, std::map<int, std::unordered_set<int>> &gts_ids_, std::vector<std::pair<float, float>> &avg_dis_selectivity_, LinearRegression *linear_regression_ = nullptr)
+                       size_t max_elements, std::map<int, std::unordered_set<int>> &gts_ids_, std::vector<std::pair<float, float>> &avg_dis_selectivity_, std::unordered_map<std::string, std::string> &constants_)
             : hnswlib::HierarchicalNSW<dist_t>(space, max_elements) // parent constructor
                                                                     // child constructor
         {
@@ -66,7 +67,7 @@ namespace qwery_aware
             total_vectors = max_elements;
             gts_ids = gts_ids_;
             avg_dis_selectivity = avg_dis_selectivity_;
-            linear_regression = linear_regression_;
+            constants = constants_;
         }
 
         QweryAwareHNSW(
@@ -77,9 +78,6 @@ namespace qwery_aware
             query_count = 0;
             visited_list_pool_ = std::unique_ptr<hnswlib::VisitedListPool>(new hnswlib::VisitedListPool(1, max_elements));
             total_vectors = max_elements;
-
-            linear_regression = nullptr;
-            // gts_ids and avg_dis_selectivity remain empty
         }
 
         // Compute the result
@@ -135,16 +133,13 @@ namespace qwery_aware
                 bst_->search(embeddings, score, entrypoint_node, visited_nodes);
             }
 
-
-
             if (!visited_nodes.empty())
             {
 
-
                 std::vector<size_t> touching_ids;
-               // auto top_candidates = searchBaseLayerTwoHop(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
+                // auto top_candidates = searchBaseLayerTwoHop(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
 
-                 auto top_candidates = searchBaseLayer(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
+                auto top_candidates = searchBaseLayer(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
                 std::priority_queue<std::pair<dist_t, size_t>> result;
 
                 while (!top_candidates.empty())
@@ -240,8 +235,6 @@ namespace qwery_aware
                 //  exit(0);
             }
 
-            
-
             if (empty_attribute_check == false)
             {
                 // Cold start if no visited nodes found
@@ -249,10 +242,6 @@ namespace qwery_aware
 
                 handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg);
             }
-
-            // else{
-            //     handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg);
-            // }
         }
 
         // Returning the nearest neighbor node IDs for a query, limited to top-K results.
@@ -314,7 +303,7 @@ namespace qwery_aware
          */
 
         template <bool bare_bone_search = true, bool collect_metrics = false>
-        CandidateQueue searchBaseLayer(tableint ep_id, const void *data_point, size_t ef, size_t query_number, std::unordered_set<size_t> *visited_nodes_by_previous_queries = nullptr, bool cold_start = false, std::vector<size_t> &touching_ids={})
+        CandidateQueue searchBaseLayer(tableint ep_id, const void *data_point, size_t ef, size_t query_number, std::unordered_set<size_t> *visited_nodes_by_previous_queries = nullptr, bool cold_start = false, std::vector<size_t> &touching_ids = {})
         {
 
             hnswlib::VisitedList *vl = visited_list_pool_->getFreeVisitedList();
@@ -548,14 +537,12 @@ namespace qwery_aware
             //     result.pop();
             // }
 
-           // auto results = coldStartKnn(embeddings.data(), this->ef_, k, query_num);
+            // auto results = coldStartKnn(embeddings.data(), this->ef_, k, query_num);
 
-            
-
-          auto results = coldStartPreFiltering(embeddings.data(), this->ef_, k, query_num);
+            auto results = coldStartPreFiltering(embeddings.data(), this->ef_, k, query_num);
 
             std::string dir =
-                "//data3/Adeel/BEIRQweryAware/ProposedQweryAwareSimple/" +
+                constants["RESULT_FOLDER"] +
                 std::to_string(this->ef_);
             create_directory_if_not_exists(dir);
 
@@ -1201,12 +1188,12 @@ namespace qwery_aware
 
                 // Computing the local selectivity
 
-            //    twoHopSearch(data_point, current_node_id, query_number, top_candidates, candidate_set,
-            //                 lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+                //    twoHopSearch(data_point, current_node_id, query_number, top_candidates, candidate_set,
+                //                 lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                 // oneHopSearch(data_point, current_node_id, query_number, top_candidates, candidate_set,
                 //              lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                 directedTwoHopSearch(data_point, current_node_id, query_number, top_candidates, candidate_set,
-                             lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+                                     lowerBound, ef, visited_array, visited_array_tag, touching_ids);
             }
 
             visited_list_pool_->releaseVisitedList(vl);
@@ -1338,7 +1325,7 @@ namespace qwery_aware
                 }
 
                 // Write results to CSV
-                std::string filename = "/data4/hnsw/TripClick/REsultTestingQweryAware/" +
+                std::string filename = constants["RESULT_FOLDER"] +
                                        std::to_string(this->ef_) +
                                        "/Q" + std::to_string(query_num + batch_start) + ".csv";
 
@@ -1540,6 +1527,59 @@ namespace qwery_aware
                 // Cold start if no visited nodes found
                 handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg);
             }
+        }
+
+        void compute_distance_for_queries(const std::vector<std::vector<float>> &queries_embedding,
+                                          size_t total_size,
+                                          const std::string &path_for_distance)
+        {
+            // Open file to save results
+            std::ofstream fout(path_for_distance);
+            if (!fout.is_open())
+            {
+                std::cerr << "❌ Error: could not open " << path_for_distance << " for writing.\n";
+                return;
+            }
+
+            // Random generator for node selection
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<size_t> dist(0, total_size - 1);
+
+            std::cout << "🔹 Computing minimum random distances for "
+                      << queries_embedding.size() << " queries..." << std::endl;
+
+            // Optional: header line
+            fout << "Distance\n";
+
+            // Iterate over each query embedding
+            for (size_t q = 0; q < queries_embedding.size(); q++)
+            {
+                const auto &query = queries_embedding[q];
+
+                float min_dist = std::numeric_limits<float>::max();
+
+                // Pick 10 random nodes and compute distances
+                for (int i = 0; i < 10; i++)
+                {
+                    size_t node = dist(gen); // random node ID in [0, total_size-1]
+
+                    // Get pointer to that node’s embedding in your index
+                    char *ep_data = this->getDataByInternalId(node);
+
+                    // Compute distance using your existing function
+                    dist_t d = this->fstdistfunc_(query.data(), ep_data, this->dist_func_param_);
+
+                    if (d < min_dist)
+                        min_dist = d;
+                }
+
+                // Save minimum distance for this query
+                fout << min_dist << "\n";
+            }
+
+            fout.close();
+            std::cout << "✅ Saved minimum random distances to " << path_for_distance << std::endl;
         }
     };
 }
