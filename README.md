@@ -94,7 +94,15 @@ To compute query-aware point query results, navigate to the `/build` folder and 
 ```bash
 ./example_query_aware_point
 ```
-#### 2️⃣ Compute Ground Truth
+#### 2️⃣ Running Range Queries
+
+To compute query-aware range query results, navigate to the `/build` folder and run:
+
+```bash
+./example_query_aware_range
+```
+
+#### 3️⃣ Compute Ground Truth
 
 To obtain ground truth results:
 
@@ -107,7 +115,7 @@ To obtain ground truth results:
 ```bash
 ./example_query_aware_point
 ```
-#### 3️⃣ Compute Selectivity and Distance
+#### 4️⃣,Compute Selectivity and Distance
 
 To calculate selectivity and distance metrics:
 
