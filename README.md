@@ -1,4 +1,4 @@
-# 🧠 Query-Aware Indexing for Hybrid Query Performance
+# 🧠 Query-Aware Indexing for Hybrid Search
 
 This project implements a **novel query-aware indexing approach** designed to enhance navigation and entry-point selection for **approximate nearest neighbor (ANN) search**, specifically targeting improved performance in **agnostic hybrid queries**.
 
