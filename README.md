@@ -17,7 +17,8 @@ Follow these steps to clone the repository and compile the project executables.
 ### 1️⃣ Clone the Project
 ```bash
 git clone https://github.com/AdeelAslamSoton/QueryAwareIndexing.git
-### 2️⃣ Prepare and Build
+```
+### 2️⃣ **Prepare and Build**
 
 Navigate to the `hnswlib` directory, clean up any previous builds, and compile using CMake:
 
@@ -36,6 +37,7 @@ cmake ..
 
 # Compile the project
 make
+```
 ### 📂 Data Reading and Example Usage
 
 The project assumes embeddings and attributes are stored in CSV-like files where columns are separated by semicolons (`;`) and embedding values themselves are separated by commas (`,`).  
@@ -80,6 +82,7 @@ pair<vector<vector<float>>, vector<string>> reading_files(const string &file_pat
     }
     return {total_embeddings, attributes};
 }
+```
 ### 🚀 Running Executables
 
 All commands are executed from the `/build` directory.
@@ -90,19 +93,21 @@ To compute query-aware point query results, navigate to the `/build` folder and 
 
 ```bash
 ./example_query_aware_point
-#### Compute Ground Truth
+```
+#### 2️⃣ Compute Ground Truth
 
 To obtain ground truth results:
 
 1. Open the source file (e.g., `example_query_aware_point.cpp`).
 2. Comment out the lines related to the proposed query-aware search method.
-3. Uncomment the line marked `// ground file` (or similar) for ground truth computation.
+3. Uncomment the line marked `// ground_truth` (or similar) for ground truth computation.
 4. Re-run `make` in the `/build` directory.
 5. Execute the example again:
 
 ```bash
 ./example_query_aware_point
-#### Compute Selectivity and Distance
+```
+#### 3️⃣ Compute Selectivity and Distance
 
 To calculate selectivity and distance metrics:
 
@@ -110,4 +115,13 @@ To calculate selectivity and distance metrics:
 
 ```cpp
 computeSelectivityAndDistance();
+```
+---
+
+## ✉️ Questions or Queries
+
+If you have any questions, suggestions, or issues regarding this project, please feel free to contact:
+
+**Adeel Aslam**  
+📧 Email: [A.Aslam@soton.ac.uk](mailto:A.Aslam@soton.ac.uk)
 
