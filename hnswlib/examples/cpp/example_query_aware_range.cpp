@@ -175,7 +175,7 @@ void create_directory_if_not_exists(const std::string &path)
 void computeSelectivityAndDistance()
 {
 
-    std::string constant_path = "../examples/cpp/Selectivity_distance.txt";
+    std::string constant_path = "../examples/constants/Selectivity_distance.txt";
     std::unordered_map<std::string, std::string> constants = reading_constants(constant_path);
 
     int dim = std::stoi(constants["DIM"]);

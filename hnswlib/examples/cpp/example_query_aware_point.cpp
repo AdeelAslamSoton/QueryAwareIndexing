@@ -271,7 +271,7 @@ inline void ParallelFor(size_t start, size_t end, size_t numThreads, Function fn
 void computeSelectivityAndDistance()
 {
 
-    std::string constant_path = "../examples/cpp/Selectivity_distance.txt";
+    std::string constant_path = "../examples/constants/Selectivity_distance.txt";
     std::unordered_map<std::string, std::string> constants = reading_constants(constant_path);
 
     int dim = std::stoi(constants["DIM"]);
