@@ -38,6 +38,10 @@ cmake ..
 # Compile the project
 make
 ```
+### 📂 File Paths and Constants
+All file paths and constants are stored in the ../examples/constants/ folder. Each constant is saved as a .txt file.
+
+For each query type, ensure the corresponding file is updated or referenced appropriately. Organizing constants this way makes it easy to manage and maintain file paths for different query types without modifying the source code.
 ### 📂 Data Reading and Example Usage
 
 The project assumes embeddings and attributes are stored in CSV-like files where columns are separated by semicolons (`;`) and embedding values themselves are separated by commas (`,`).  
