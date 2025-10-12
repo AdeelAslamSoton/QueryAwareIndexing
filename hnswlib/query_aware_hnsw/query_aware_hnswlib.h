@@ -193,7 +193,7 @@ namespace qwery_aware
                 }
 
                 std::string dir =
-                    "/data3/Adeel/BEIRQweryAware/ProposedQweryAwareSimple/" + std::to_string(this->ef_);
+                    constants["RESULT_FOLDER"] + std::to_string(this->ef_);
 
                 create_directory_if_not_exists(dir);
 
@@ -994,7 +994,7 @@ namespace qwery_aware
             std::reverse(results.begin(), results.end());
 
             // Write CSV with global query index
-            std::string filename = "/data3/Adeel/YoutubeQweryAware/GT/Q" +
+            std::string filename =constants["GROUND_TRUTH_FOLDER"]+"/Q" +
                                    std::to_string(batch_start + query_num_batch) + ".csv";
             std::ofstream out(filename);
             if (!out.is_open())

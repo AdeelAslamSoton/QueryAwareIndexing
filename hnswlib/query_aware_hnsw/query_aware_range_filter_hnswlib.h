@@ -53,11 +53,13 @@ namespace qwery_aware
 
         std::vector<std::pair<float, float>> avg_dis_selectivity; //= readDistanceSelectivity("/data4/hnsw/TripClick/QueriesForQueriesAware/Selectivity/distance_selectivity_.csv");
         const std::map<int, pair<float, float>> *mapWithBin;
+        std::unordered_map<std::string, std::string> constants;
 
     public:
         // Constructor: initialize both parent and child with maximum element
+
         QweryAwareHNSWRange(hnswlib::SpaceInterface<dist_t> *space,
-                            size_t max_elements, std::map<int, std::unordered_set<int>> &gts_ids_, std::vector<std::pair<float, float>> &avg_dis_selectivity_, const std::map<int, pair<float, float>> *mapWithBin_ = nullptr)
+                            size_t max_elements, std::map<int, std::unordered_set<int>> &gts_ids_, std::vector<std::pair<float, float>> &avg_dis_selectivity_, const std::map<int, pair<float, float>> *mapWithBin_, std::unordered_map<std::string, std::string> &constants_)
             : hnswlib::HierarchicalNSW<dist_t>(space, max_elements) // parent constructor
                                                                     // child constructor
         {
@@ -68,6 +70,7 @@ namespace qwery_aware
             gts_ids = gts_ids_;
             avg_dis_selectivity = avg_dis_selectivity_;
             mapWithBin = mapWithBin_;
+            constants = constants_;
         }
 
         QweryAwareHNSWRange(
@@ -90,6 +93,11 @@ namespace qwery_aware
         std::map<int, std::mutex> attribute_mutex_map;
         // Global mutex for creation of new BST and mutex
         std::mutex creation_mutex;
+
+        /* Initializes a BST for each bin range.
+         * Creates a new BST and mutex per bin to manage hybrid queries.
+         * Ensures thread-safe mapping of bins to their index trees.
+         */
 
         void bst_initialization(const std::map<int, std::pair<float, float>> &mapWithBin)
         {
@@ -123,24 +131,10 @@ namespace qwery_aware
                     {
                         bst->search(embeddings, score, entrypoint_node, visited_nodes);
                     }
-                    if (visited_nodes.size() == 100 || visited_nodes.size() == 0) break;
-                       
+                    if (visited_nodes.size() >= 100 || visited_nodes.size() == 0)
+                        break;
                 }
             }
-
-            // // Step 2: Search all BSTs without locking per BST (if safe)
-            // std::unordered_set<size_t> visited_nodes;
-            // std::pair<float, size_t> entrypoint_node;
-
-            // for (BST *bst : bst_list)
-            // {
-            //     if (bst)
-            //     {
-
-            //         // std::lock_guard<std::mutex> lock(attribute_mutex_map[bin]); // optional
-            //         bst->search(embeddings, score, entrypoint_node, visited_nodes);
-            //     }
-            // }
 
             if (!visited_nodes.empty())
             {
@@ -213,7 +207,7 @@ namespace qwery_aware
                 }
 
                 std::string dir =
-                    "/data3/Adeel/Query_aware_range/YoutubeAudioLike/QueryAware/Results/" + std::to_string(this->ef_);
+                    constants["RESULT_FOLDER"] + std::to_string(this->ef_);
 
                 create_directory_if_not_exists(dir);
 
@@ -251,8 +245,6 @@ namespace qwery_aware
                 {
                     std::cerr << "Error: could not open results.csv for writing\n";
                 }
-
-                //  exit(0);
             }
 
             else
@@ -501,10 +493,10 @@ namespace qwery_aware
 
             // auto results = coldStartKnn(embeddings.data(), this->ef_, k, query_num);
 
-           //auto results = coldStartPreFiltering(embeddings.data(), this->ef_, k, query_num);
+            // auto results = coldStartPreFiltering(embeddings.data(), this->ef_, k, query_num);
 
             std::string dir =
-                "/data3/Adeel/Query_aware_range/YoutubeAudioLike/QueryAware/Results/" +
+                constants["RESULT_FOLDER"] +
                 std::to_string(this->ef_);
             create_directory_if_not_exists(dir);
 
@@ -544,20 +536,20 @@ namespace qwery_aware
                     dist_id_pair.first += match_count;
 
                     // Step 4: Insert into BST
-                    // for (int bin : bins)
-                    // {
-                    //     auto it = attribute_tree_mapping.find(bin);
-                    //     if (it != attribute_tree_mapping.end())
-                    //     {
-                    //         BST *bst_ = it->second.get();
-                    //         if (bst_)
-                    //         {
-                    //             std::lock_guard<std::mutex> lock(attribute_mutex_map[bin]);
-                    //             bst_->insert(dist_id_pair, id, embeddings, nearest_nodes_array);
-                    //         }
-                    //     }
-                    //     break;
-                    // }
+                    for (int bin : bins)
+                    {
+                        auto it = attribute_tree_mapping.find(bin);
+                        if (it != attribute_tree_mapping.end())
+                        {
+                            BST *bst_ = it->second.get();
+                            if (bst_)
+                            {
+                                std::lock_guard<std::mutex> lock(attribute_mutex_map[bin]);
+                                bst_->insert(dist_id_pair, id, embeddings, nearest_nodes_array);
+                            }
+                        }
+                        // break;
+                    }
                 }
 
                 // Step 5: Write results to CSV
@@ -936,27 +928,26 @@ namespace qwery_aware
         void groundTruthBatch(const void *query_data, size_t k, size_t query_num_batch,
                               char *filter_ids_map, size_t total_elements, size_t batch_num, size_t batch_start)
         {
-            
+
             std::priority_queue<std::pair<dist_t, size_t>> top_candidates;
 
             for (tableint i = 0; i < total_vectors; i++)
             {
-               // std::cout<<"I am executing"<<total_vectors<<std::endl;
+                // std::cout<<"I am executing"<<total_vectors<<std::endl;
                 char *ep_data = this->getDataByInternalId(i);
 
                 // apply batch-local filter
                 if (filter_ids_map[query_num_batch * total_elements + i])
                 {
-                    
+
                     dist_t dist = this->fstdistfunc_(query_data, ep_data, this->dist_func_param_);
                     top_candidates.emplace(dist, i);
 
                     if (top_candidates.size() > k)
                         top_candidates.pop();
                 }
-
             }
-                //std::cout<<"I am executing..."<<total_vectors<<std::endl;
+            // std::cout<<"I am executing..."<<total_vectors<<std::endl;
 
             // Extract results in ascending distance
             std::vector<std::pair<dist_t, size_t>> results;
@@ -1014,7 +1005,7 @@ namespace qwery_aware
 
                 if (filter_id_map[query_number * total_vectors + id])
                 {
-                   
+
                     char *ep_data = this->getDataByInternalId(id);
                     dist_t dist = this->fstdistfunc_(data_point, ep_data, this->dist_func_param_);
                     candidate_set.emplace(-dist, id);

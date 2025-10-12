@@ -186,7 +186,7 @@ std::vector<char> loadFilterMap(
     return buffer;
 }
 
-// Compute the selectivity
+// Create the directory if not exist
 
 void create_directory_if_not_exists(const std::string &path)
 {
@@ -267,7 +267,7 @@ inline void ParallelFor(size_t start, size_t end, size_t numThreads, Function fn
         }
     }
 }
-
+// Compute the selectivity
 void computeSelectivityAndDistance()
 {
 
@@ -334,7 +334,7 @@ int main()
         hnswlib::HierarchicalNSW<float> *alg_query_aware =
             new hnswlib::HierarchicalNSW<float>(&space, max_elements, M, ef_construction);
         // Build HNSW index
-        ParallelFor(0, max_elements, 40, [&](size_t row, size_t threadId)
+        ParallelFor(0, max_elements, num_threads, [&](size_t row, size_t threadId)
                     { alg_query_aware->addPoint((void *)(data + dim * row), (int)row); });
         alg_query_aware->saveIndex(constants["INDEX_PATH"]);
         delete[] data;
@@ -412,7 +412,7 @@ int main()
                 {
                     const std::string &attribute = queries.second[i];
 
-                    ParallelFor(0, alg_query_aware->max_elements_, 40, [&](size_t row, size_t threadId)
+                    ParallelFor(0, alg_query_aware->max_elements_, num_threads, [&](size_t row, size_t threadId)
                                 {
                     if (row >= meta_data_attributes.size()) {
                         std::cerr << "⚠️ meta_data_attributes size exceeded for row " << row << std::endl;
@@ -441,8 +441,8 @@ int main()
                                 size_t global_query_index = start + row_batch;
                                 const std::vector<float> &emb = queries.first[global_query_index];
 
-                                std::vector<float> new_query_reg = {avg_dis_selectivity[start + row_batch].first,
-                                                                    avg_dis_selectivity[start + row_batch].second};
+                                std::vector<float> new_query_reg = {avg_dis_selectivity[global_query_index].first,
+                                                                    avg_dis_selectivity[global_query_index].second};
 
                                 float score = models[i]->predict(new_query_reg);
 

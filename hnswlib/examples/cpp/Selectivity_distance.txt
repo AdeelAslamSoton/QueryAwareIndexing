@@ -4,4 +4,4 @@ META_DATA_PATH /data4/hnsw/beir/beir_docs.csv
 QUERIES_PATH /data4/hnsw/beir/beir_queries.csv
 GROUND_TRUTH_FOLDER /data3/Adeel/BEIRQweryAware/GT
 SELECTIVITY /data3/Adeel/BEIRQweryAware/Selectivity/Selectivity.csv
-DISTANCE /data3/Adeel/BEIRQweryAware/Selectivity/Selectivity.csv
+DISTANCE /data3/Adeel/BEIRQweryAware/Selectivity/Distance.csv
