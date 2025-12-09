@@ -20,6 +20,10 @@ vector<string> splitString(const string &str, char delimiter);
 vector<float> splitToFloat(const string &str, char delimiter);
 
 bool isNullOrEmpty(const string &str);
+string trim(const string &s);
+vector<string> split_and_clean(const string &s);
+vector<vector<string>> reading_files_attributes_and_cleaning(const string &file_path);
+
 // Compute the selectivity and write it in a file
 void writeSelectivityCSV(const std::vector<std::string> &attributes,
                          const std::vector<std::string> &meta_data_attributes,
@@ -283,7 +287,7 @@ void computeSelectivityAndDistance()
 
     writeSelectivityCSV(queries.second,
                         meta_data_attributes,
-                       constants["SELECTIVITY"]);
+                        constants["SELECTIVITY"]);
     hnswlib::L2Space space(dim);
     qwery_aware::QweryAwareHNSW<float> *alg_query_aware = new qwery_aware::QweryAwareHNSW<float>(&space, elements);
     std::cout << "Index Loaded  " << elements << std::endl;
@@ -297,7 +301,7 @@ int main()
 {
     // computeSelectivityAndDistance();
     // exit(-1);
-    std::string constant_path = "../examples/cpp/constants_and_filepaths.txt";
+    std::string constant_path = "../examples/constants/constants_and_filepaths_point.txt";
     std::unordered_map<std::string, std::string> constants = reading_constants(constant_path);
 
     int dim = std::stoi(constants["DIM"]);
@@ -345,17 +349,19 @@ int main()
 
         std::map<int, std::unordered_set<int>> gts_ids = groundTruthIds(constants["GROUND_TRUTH_FOLDER"], 10);
 
-        vector<std::string> meta_data_attributes = reading_files_attributes(constants["META_DATA_PATH"]);
+        // vector<std::string> meta_data_attributes = reading_files_attributes(constants["META_DATA_PATH"]);
+        vector<vector<string>> meta_data_attributes_cleaned = reading_files_attributes_and_cleaning(constants["META_DATA_PATH"]);
 
         // Reading file for queries
         pair<vector<vector<float>>, vector<string>> queries = reading_files(constants["QUERIES_PATH"], dim, true);
 
-        size_t elements = meta_data_attributes.size();
+        size_t elements = meta_data_attributes_cleaned.size();
 
         std::vector<std::pair<float, float>> avg_dis_selectivity = readDistanceSelectivity(constants["DISTANCE_SELECTIVITY"]);
+        
 
         qwery_aware::QweryAwareHNSW<float> *alg_query_aware = new qwery_aware::QweryAwareHNSW<float>(&space, elements, gts_ids, avg_dis_selectivity, constants);
-        std::cout << "Index Loaded  " << elements << std::endl;
+
         alg_query_aware->loadIndex(constants["INDEX_PATH"], &space);
         std::cout << "Index Loaded  " << elements << std::endl;
         // Searching
@@ -377,7 +383,7 @@ int main()
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
         size_t total_elements = alg_query_aware->max_elements_;
-        size_t batch_size = 1000;
+        size_t batch_size = 200;
 
         size_t num_batches = (queries.first.size() + batch_size - 1) / batch_size;
         int counter = 0;
@@ -389,8 +395,8 @@ int main()
             size_t start = b * batch_size;
             size_t end = std::min(start + batch_size, queries.first.size());
 
-            std::cout << "Processing batch " << (b + 1) << "/" << num_batches
-                      << " (queries " << start << " to " << end - 1 << ")" << std::endl;
+            // std::cout << "Processing batch " << (b + 1) << "/" << num_batches
+            //           << " (queries " << start << " to " << end - 1 << ")" << std::endl;
             create_directory_if_not_exists(constants["FILTER_PATH"]);
             std::string filter_file = constants["FILTER_PATH"] + "/filter_batch_" + std::to_string(start) + ".bin";
 
@@ -411,14 +417,34 @@ int main()
                 for (size_t i = start; i < end; i++)
                 {
                     const std::string &attribute = queries.second[i];
+                    vector<string> query_attributes = split_and_clean(attribute);
 
                     ParallelFor(0, alg_query_aware->max_elements_, num_threads, [&](size_t row, size_t threadId)
                                 {
-                    if (row >= meta_data_attributes.size()) {
+                    if (row >= meta_data_attributes_cleaned.size()) {
                         std::cerr << "⚠️ meta_data_attributes size exceeded for row " << row << std::endl;
                         return;
                     }
-                    bool match_found = (attribute == meta_data_attributes[row]);
+                    //bool match_found = (attribute == meta_data_attributes[row]);
+                    const auto &row_attributes = meta_data_attributes_cleaned[row];
+
+                        bool match_found = false;
+
+                        // Outer loop: each attribute in the query
+                            for (const auto &q_attr : query_attributes)
+                            {
+                                // Inner loop: each attribute in the current metadata row
+                                for (const auto &row_attr : row_attributes)
+                                {
+                                    if (q_attr == row_attr)
+                                    {
+                                        match_found = true;
+                                        break; // Break inner loop
+                                    }
+                                }
+                                if (match_found) break; // Break outer loop if a match was found
+                            }
+
                    //  (attribute >= meta_data_attributes[row]);
                     filter_ids_map[(i - start) * total_elements + row] = match_found; });
                 }
@@ -426,6 +452,7 @@ int main()
                 saveFilterMap(filter_ids_map, filter_file);
                 std::cout << "💾 Saved filter map for batch " << b + 1 << " to cache" << std::endl;
             }
+            
             //  std::cout << "Predicate Set alignment (batch " << b + 1 << ")" << std::endl;
 
             // Step 2: Apply predicate filter
@@ -436,7 +463,7 @@ int main()
                 alg_query_aware->setEf(efs_array[i]);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 // loop
-                ParallelFor(0, end - start, 1, [&](size_t row_batch, size_t threadId)
+                ParallelFor(0, end - start, 40, [&](size_t row_batch, size_t threadId)
                             {
                                 size_t global_query_index = start + row_batch;
                                 const std::vector<float> &emb = queries.first[global_query_index];
@@ -446,9 +473,9 @@ int main()
 
                                 float score = models[i]->predict(new_query_reg);
 
-                                alg_query_aware->search(emb, k, queries.second[global_query_index], score, row_batch, start, models[i].get());
+                               alg_query_aware->search(emb, k, queries.second[global_query_index], score, row_batch, start, models[i].get());
 
-                                // alg_query_aware->groundTruthBatch(emb.data(), k, row_batch,
+                                // alg_query_aware->groundTruthBatchSelectivity(emb.data(), k, global_query_index,
                                 //                                   filter_ids_map.data(), total_elements,
                                 //                                   b, start);
                             });
@@ -458,13 +485,14 @@ int main()
                 std::cout << "Finished batch " << start
                           << " EFS: " << efs_array[i]
                           << " | Time: " << duration_ms << " ms" << std::endl;
+                       //   break;
+                         
             }
         }
 
         // Final cleanup
-        
-        delete alg_query_aware;
 
+        delete alg_query_aware;
     }
 }
 
@@ -478,18 +506,21 @@ pair<vector<vector<float>>, vector<string>> reading_files(const string &file_pat
     getline(file, line); // skip header
     while (getline(file, line))
     {
+
         stringstream ss(line);
 
-        string embedding, attribute;
+        string embedding, attribute, skip;
         if (!queries)
         {
+
             getline(ss, embedding, ';');
             getline(ss, attribute, ';');
         }
         else
         {
-            getline(ss, embedding, ';');
+            getline(ss, skip, ';');
             getline(ss, attribute, ';');
+            getline(ss, embedding, ';');
         }
         if (!isNullOrEmpty(embedding))
         {
@@ -578,4 +609,69 @@ std::unordered_map<std::string, std::string> reading_constants(std::string &path
     file.close();
 
     return constants;
+}
+// Helper fucntion to trim whitespace
+string trim(const string &s)
+{
+    size_t start = s.find_first_not_of(" \t\n\r");
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return (start == string::npos) ? "" : s.substr(start, end - start + 1);
+}
+// Helper function to split and clean a string
+vector<string> split_and_clean(const string &s)
+{
+    vector<string> result;
+    stringstream ss(s);
+    string token;
+
+    while (getline(ss, token, ','))
+    {
+        // Trim whitespace
+        token = trim(token);
+        // Remove quotes
+        token.erase(remove(token.begin(), token.end(), '"'), token.end());
+        token.erase(remove(token.begin(), token.end(), '\''), token.end());
+        // Convert to lowercase
+        transform(token.begin(), token.end(), token.begin(), ::tolower);
+        // Add if not empty
+        if (!token.empty())
+        {
+            result.push_back(token);
+        }
+    }
+    return result;
+}
+
+vector<vector<string>> reading_files_attributes_and_cleaning(const string &file_path)
+{
+    ifstream file(file_path);
+    vector<vector<string>> attributes_all;
+    string line;
+
+    if (!file.is_open())
+    {
+        cerr << "Could not open file: " << file_path << endl;
+        return attributes_all;
+    }
+
+    // Skip header
+    getline(file, line);
+
+    while (getline(file, line))
+    {
+        stringstream ss(line);
+        string id, embedding, attribute;
+
+        // Read required columns
+        //  getline(ss, embedding, ';'); // first column
+        getline(ss, attribute, ';'); // attribute column
+
+        // Split and clean attributes
+        vector<string> cleaned_attributes = split_and_clean(attribute);
+
+        // Add to final vector
+        attributes_all.push_back(cleaned_attributes);
+    }
+
+    return attributes_all;
 }

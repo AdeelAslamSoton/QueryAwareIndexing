@@ -6,6 +6,7 @@
 #include <mutex>
 #include <atomic>
 #include <random>
+#include <iomanip>
 #include <fstream>
 #include <omp.h>
 #include <sys/stat.h>
@@ -968,13 +969,16 @@ namespace qwery_aware
                               char *filter_ids_map, size_t total_elements, size_t batch_num, size_t batch_start)
         {
             std::priority_queue<std::pair<dist_t, size_t>> top_candidates;
+             size_t local_index = query_num_batch - batch_start;
+
 
             for (tableint i = 0; i < total_vectors; i++)
             {
                 char *ep_data = this->getDataByInternalId(i);
 
+               
                 // apply batch-local filter
-                if (filter_ids_map[query_num_batch * total_elements + i])
+                if (filter_ids_map[local_index * total_elements + i])
                 {
                     dist_t dist = this->fstdistfunc_(query_data, ep_data, this->dist_func_param_);
                     top_candidates.emplace(dist, i);
@@ -994,8 +998,9 @@ namespace qwery_aware
             std::reverse(results.begin(), results.end());
 
             // Write CSV with global query index
-            std::string filename =constants["GROUND_TRUTH_FOLDER"]+"/Q" +
-                                   std::to_string(batch_start + query_num_batch) + ".csv";
+            // create_directory_if_not_exists(constants["GROUND_TRUTH_FOLDER"] + "/" + batch_num);
+            std::string filename = constants["GROUND_TRUTH_FOLDER"] + "/Q" +
+                                   std::to_string(batch_start + local_index) + ".csv";
             std::ofstream out(filename);
             if (!out.is_open())
             {
@@ -1017,7 +1022,7 @@ namespace qwery_aware
             }
 
             out.close();
-            std::cout << "✅ Saved results for query " << (batch_start + query_num_batch) << " to " << filename << std::endl;
+            std::cout << "✅ Saved results for query " << (batch_start + local_index) << " to " << filename << std::endl;
         }
         // Implementation of NAvix
         std::priority_queue<std::pair<dist_t, size_t>> navix(const void *query_data, size_t ef, size_t k, size_t query_num)
@@ -1580,6 +1585,30 @@ namespace qwery_aware
 
             fout.close();
             std::cout << "✅ Saved minimum random distances to " << path_for_distance << std::endl;
+        }
+
+        void groundTruthBatchSelectivity(const void *query_data, size_t k, size_t query_num_batch,
+                                         char *filter_ids_map, size_t total_elements,
+                                         size_t batch_num, size_t batch_start)
+        {
+            size_t qualify_count = 0;
+
+            size_t local_index = query_num_batch - batch_start; // <-- FIXED
+
+            for (tableint i = 0; i < total_vectors; i++)
+            {
+                if (filter_ids_map[local_index * total_elements + i]) // <-- FIXED
+                {
+                    qualify_count++;
+                }
+            }
+
+            double selectivity =
+                (total_elements == 0) ? 0.0 : static_cast<double>(qualify_count) / static_cast<double>(total_elements);
+
+            std::cout << "Q" << query_num_batch << ","
+                      << std::fixed << std::setprecision(3)
+                      << selectivity << std::endl; // <-- print selectivity
         }
     };
 }

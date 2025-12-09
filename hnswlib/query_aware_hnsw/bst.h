@@ -131,7 +131,7 @@ public:
     }
 
      void search(const std::vector<float> &query_embedding,
-            float base_score,
+            float &base_score,
             std::pair<float, size_t> &smallest_score_id_,
             std::unordered_set<size_t> &visited_nodes)
 {
@@ -152,20 +152,21 @@ public:
         float dist = computeDistanceWithHNSW(query_embedding, curr->embeddings);
 
         // Update cumulative distance along this path
-        cumulative_dist += dist;
+       //cumulative_dist += dist;
+       float node_score = base_score + dist;
 
         // Update best node if cumulative distance is smaller
-        if (cumulative_dist < best_dist)
+        if (node_score < best_dist)
         {
-            best_dist = cumulative_dist;
+            best_dist = node_score;
             best_id = curr->smallest_score_id.second;
         }
 
         // Decide traversal using cumulative distance vs node’s smallest_score_id
         // You can either compare using cumulative_dist or just dist for BST ordering
-        if (cumulative_dist < curr->smallest_score_id.first)
+        if (node_score < curr->smallest_score_id.first)
             curr = curr->left.get();
-        else if (cumulative_dist > curr->smallest_score_id.first)
+        else if (node_score > curr->smallest_score_id.first)
             curr = curr->right.get();
         else
             break;
