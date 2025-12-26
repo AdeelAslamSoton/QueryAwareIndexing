@@ -2,12 +2,14 @@
 #include <map>
 #include <memory> // for std::unique_ptr
 #include <string> // for std::string
+#include <cstring>
 #include <vector>
 #include <mutex>
 #include <atomic>
 #include <random>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
 #include <omp.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -54,6 +56,8 @@ namespace qwery_aware
         std::vector<std::pair<float, float>> avg_dis_selectivity; //= readDistanceSelectivity("/data4/hnsw/TripClick/QueriesForQueriesAware/Selectivity/distance_selectivity_.csv");
 
         std::unordered_map<std::string, std::string> constants;
+        // A counter for total inserted nodes during cold start I means which uses prefiltering
+        size_t cold_start_insertion_counter;
 
     public:
         // Constructor: initialize both parent and child with maximum element
@@ -69,6 +73,8 @@ namespace qwery_aware
             gts_ids = gts_ids_;
             avg_dis_selectivity = avg_dis_selectivity_;
             constants = constants_;
+            // Cold start insertion counter incremented
+            cold_start_insertion_counter = 0;
         }
 
         QweryAwareHNSW(
@@ -90,14 +96,16 @@ namespace qwery_aware
         // Global mutex for creation of new BST and mutex
         std::mutex creation_mutex;
 
-        void search(const std::vector<float> &embeddings, size_t k, const std::string &attribute, float &score, size_t &query_num, size_t batch_start, LinearRegression *linear_reg = nullptr)
+        void search(const std::vector<float> &embeddings, size_t k, const std::string &attribute, std::pair<float, float> &max_distance_estimated_recall, size_t &query_num, size_t batch_start, LinearRegression *linear_reg = nullptr)
         {
 
+            // int dim=20;
+            // std::vector<float> vector_quantized = reduce_vector_linear(embeddings, dim);
             BST *bst_ = nullptr;
             bool empty_attribute_check = false;
 
             // First, check without locking
-            auto it = attribute_tree_mapping.find(attribute);
+            auto it = attribute_tree_mapping.find(attribute); // It is find the attribute in the map
             if (it != attribute_tree_mapping.end())
             {
                 bst_ = it->second.get();
@@ -112,6 +120,7 @@ namespace qwery_aware
                 if (it == attribute_tree_mapping.end())
                 {
                     bst_ = new BST(static_cast<hnswlib::HierarchicalNSW<float> *>(this));
+                    // bst_ = new BST(dim);
                     attribute_tree_mapping[attribute] = std::unique_ptr<BST>(bst_);
                     attribute_mutex_map[attribute]; // default construct mutex
                 }
@@ -129,13 +138,30 @@ namespace qwery_aware
             std::pair<float, size_t> entrypoint_node;
 
             {
-
                 std::lock_guard<std::mutex> lock(attribute_mutex_map[attribute]);
-                bst_->search(embeddings, score, entrypoint_node, visited_nodes);
+                // auto start_time = std::chrono::high_resolution_clock::now();
+                // bst_->search(vector_quantized, score, entrypoint_node, visited_nodes);
+                bst_->search(embeddings, max_distance_estimated_recall, entrypoint_node, visited_nodes);
             }
 
             if (!visited_nodes.empty())
             {
+                std::string file_path = "/data3/Adeel/PaperResultsForQweryAware/DistanceRecallResultDistance/Distance10ForNearestNodeEmbedding/Q" + std::to_string(query_num + batch_start) + ".csv";
+
+                std::ofstream outfile(file_path);
+                if (!outfile.is_open())
+                {
+                    std::cerr << "Error opening file: " << file_path << std::endl;
+                    return;
+                }
+
+                // Iterate over the unordered set and write each node on a new line
+                outfile << "Recall" << "\n";
+                for (const auto &node : visited_nodes)
+                {
+                    outfile << node << "\n";
+                }
+                outfile.close();
 
                 std::vector<size_t> touching_ids;
                 // auto top_candidates = searchBaseLayerTwoHop(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
@@ -152,7 +178,7 @@ namespace qwery_aware
 
                 std::pair<float, size_t> dist_id_pair_;
                 std::vector<std::pair<dist_t, size_t>> tmp;
-                auto nearest_nodes_array = getNearestNodes(&result, k, tmp, &dist_id_pair_);
+                auto nearest_nodes_array = getNearestNodes(&result, k, tmp, &dist_id_pair_, true);
 
                 nearest_nodes_array.insert(
                     nearest_nodes_array.end(),
@@ -179,17 +205,55 @@ namespace qwery_aware
                     // Compute recall
                     match_count = match_count / k;
 
+                    // const std::string csv_file = "/data3/Adeel/PaperResultsForQweryAware/RegressionModelResultPaper/recall_data560.csv";
+
+                    // // Check if file exists
+                    // bool file_exists = false;
+                    // {
+                    //     std::ifstream infile(csv_file);
+                    //     file_exists = infile.good();
+                    // }
+
+                    // // Open file in append mode
+                    // std::ofstream file(csv_file, std::ios::app);
+
+                    // // Write header only if file did not exist
+                    // if (!file_exists)
+                    // {
+                    //     file << "ActualRecall,PredictedRecall\n";
+                    // }
+
+                    // // Write data row
+                    // file <<  match_count << ","  // Distance
+                    //      <<max_distance_estimated_recall.second << "\n";
+
+                    // file.close();
+
+                    // std::cout << "Actual Recall" << match_count << "Predicated Recall" << max_distance_estimated_recall.second << std::endl;
+
                     // Fill the reusable vector for linear regression
                     avg_dist_sel[0] = avg_dis_selectivity[id].first;
                     avg_dist_sel[1] = avg_dis_selectivity[id].second;
 
                     linear_reg->update(avg_dist_sel, match_count);
-                    dist_id_pair_.first += match_count;
+                    dist_id_pair_.first = 0.5 * (1 - dist_id_pair_.first / max_distance_estimated_recall.first);
+                    // dist_id_pair_.first += 0.5 * (match_count);
 
                     // Insert into BST under lock
                     {
                         std::lock_guard<std::mutex> lock(attribute_mutex_map[attribute]);
-                        bst_->insert(dist_id_pair_, id, embeddings, nearest_nodes_array);
+
+                        char *ep_data = this->getDataByInternalId(nearest_nodes_array[1]);
+                                size_t floatCount = 200;
+
+                                std::vector<float> values(floatCount);
+                                std::memcpy(values.data(), ep_data, floatCount * sizeof(float));
+                                bst_->insert(dist_id_pair_, id, values, nearest_nodes_array);
+  
+
+
+                       // bst_->insert(dist_id_pair_, id, embeddings, nearest_nodes_array);
+                        // bst_->insert(dist_id_pair_, id, vector_quantized, nearest_nodes_array);
                     }
                 }
 
@@ -232,8 +296,6 @@ namespace qwery_aware
                 {
                     std::cerr << "Error: could not open results.csv for writing\n";
                 }
-
-                //  exit(0);
             }
 
             if (empty_attribute_check == false)
@@ -241,7 +303,8 @@ namespace qwery_aware
                 // Cold start if no visited nodes found
                 // Include both implementation for pre filtering and simple ACORN based two hop search
 
-                handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg);
+                // handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg, &vector_quantized);
+                handleColdStartInsertion(embeddings, k, max_distance_estimated_recall, query_num, batch_start, bst_, attribute, linear_reg);
             }
         }
 
@@ -255,7 +318,7 @@ namespace qwery_aware
         std::vector<size_t> getNearestNodes(
             std::priority_queue<std::pair<dist_t, size_t>> *results, // pointer to the priority queue
             size_t k, std::vector<std::pair<dist_t, size_t>> &tmp,
-            std::pair<float, size_t> *dist_id_pair)
+            std::pair<float, size_t> *dist_id_pair, bool reverse = false)
         {
             // Copy all results into a vector
 
@@ -274,19 +337,30 @@ namespace qwery_aware
 
             // Prepare the nearest nodes array
             std::vector<size_t> nearest_nodes_array;
-            nearest_nodes_array.reserve(std::min(k, tmp.size()));
+            nearest_nodes_array.reserve(std::max(k, tmp.size()));
 
-            dist_t smallest_distance = std::numeric_limits<dist_t>::max();
-            size_t best_id = std::numeric_limits<size_t>::max();
-            size_t limit = std::min<size_t>(k, tmp.size());
-            for (size_t i = 0; i < tmp.size(); i++) // previously it was limit for low selectivity
+            // dist_t smallest_distance = std::numeric_limits<dist_t>::max();
+            // size_t best_id = std::numeric_limits<size_t>::max();
+
+            if (reverse)
             {
-                nearest_nodes_array.push_back(tmp[i].second);
+                for (size_t i = 0; i < tmp.size(); i++) // when performed searched in reverse order
+                {
+                    nearest_nodes_array.push_back(tmp[i].second);
+                }
             }
-
+            else
+            {
+                size_t limit = std::min<size_t>(k, tmp.size());
+                for (size_t i = 0; i < limit; i++) // for prefiltered nodes
+                {
+                    nearest_nodes_array.push_back(tmp[i].second);
+                }
+            }
             // Fill dist_id_pair with the closest neighbor info
             if (!nearest_nodes_array.empty() && dist_id_pair)
             {
+
                 *dist_id_pair = {static_cast<float>(tmp[1].first), tmp[1].second};
             }
 
@@ -326,8 +400,13 @@ namespace qwery_aware
             {
                 top_candidates.emplace(dist, ep_id);
                 visited_array[ep_id] = visited_array_tag;
+                // directedTwoHopSearch(data_point, node_id, query_number, top_candidates, candidate_set,
+                //  lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                 twoHopSearch(data_point, node_id, query_number, top_candidates, candidate_set,
                              lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+
+                // oneHopSearch(data_point, node_id, query_number, top_candidates, candidate_set,
+                //              lowerBound, ef, visited_array, visited_array_tag, touching_ids);
             }
 
             while (!candidate_set.empty())
@@ -376,8 +455,10 @@ namespace qwery_aware
                         // candidate_set.emplace(-dist_local, candidate_id);
                         // top_candidates.emplace(dist_local, candidate_id);
                         // visited_array[candidate_id] = visited_array_tag;
-
+                        // oneHopSearch(data_point, node_id, query_number, top_candidates, candidate_set,
+                        //              lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                         twoHopSearch(data_point, candidate_node_id, query_number, top_candidates, candidate_set, lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+                        // directedTwoHopSearch(data_point, candidate_node_id, query_number, top_candidates, candidate_set, lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                         continue;
                     }
                     //   std::cout<<"Inside the While Loop"<<std::endl;
@@ -435,6 +516,11 @@ namespace qwery_aware
                         if (cold_start == true)
                         {
                             tableint candidate_node_id = candidate_id; // lvalue
+                            // directedTwoHopSearch(data_point, candidate_node_id, query_number, top_candidates, candidate_set, lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+
+                            // oneHopSearch(data_point, node_id, query_number, top_candidates, candidate_set,
+                            //              lowerBound, ef, visited_array, visited_array_tag, touching_ids);
+
                             twoHopSearch(data_point, candidate_node_id, query_number, top_candidates, candidate_set, lowerBound, ef, visited_array, visited_array_tag, touching_ids);
                         }
                     }
@@ -487,7 +573,7 @@ namespace qwery_aware
                     }
                     std::vector<std::pair<dist_t, size_t>> tmp;
                     float dist;
-                    auto nearest_nodes_array = getNearestNodes(&result, k, tmp, &dist);
+                    auto nearest_nodes_array = getNearestNodes(&result, k, tmp, &dist, true);
                     int id = this->query_count++;
                     float commulative_score = score + dist; // Need Computation
                     if (nearest_nodes_array.size() > 0)
@@ -516,10 +602,10 @@ namespace qwery_aware
          * @param query_num   Index of the query.
          */
 
-        void handleColdStartInsertion(const std::vector<float> &embeddings, size_t k, float &score, int query_num, size_t batch_start, BST *bstree, const std::string &attribute = "", LinearRegression *linear_reg = nullptr)
+        void handleColdStartInsertion(const std::vector<float> &embeddings, size_t k, std::pair<float, float> &max_distance_estimated_recall, int query_num, size_t batch_start, BST *bstree, const std::string &attribute = "", LinearRegression *linear_reg = nullptr, std::vector<float> *vector_quantized_ptr = nullptr)
         {
 
-            // auto result = this->searchKnn(embeddings.data(), k);
+            //  auto result = this->searchKnn(embeddings.data(), k);
 
             // std::priority_queue<std::pair<dist_t, size_t>> results;
 
@@ -575,19 +661,39 @@ namespace qwery_aware
                         }
                     }
                     match_count /= k;
-
                     // Step 3: Update linear regression
                     avg_dist_sel[0] = avg_dis_selectivity[id].first;
                     avg_dist_sel[1] = avg_dis_selectivity[id].second;
                     linear_reg->update(avg_dist_sel, match_count);
-                    dist_id_pair.first += match_count;
+                    dist_id_pair.first = 0.5 * (1 - dist_id_pair.first / max_distance_estimated_recall.first);
+                    // dist_id_pair.first += 0.5 * (match_count);
+                    // dist_id_pair.first += match_count;
 
                     // Step 4: Insert into BST
                     {
                         std::lock_guard<std::mutex> lock(attribute_mutex_map[attribute]);
                         if (bstree)
                         {
-                            bstree->insert(dist_id_pair, id, embeddings, nearest_nodes_array);
+                            if (vector_quantized_ptr != nullptr)
+                            {
+                                bstree->insert(dist_id_pair, id, *vector_quantized_ptr, nearest_nodes_array);
+                            }
+                            else
+                            {
+                                char *ep_data = this->getDataByInternalId(nearest_nodes_array[1]);
+                                size_t floatCount = 200;
+
+                                std::vector<float> values(floatCount);
+                                std::memcpy(values.data(), ep_data, floatCount * sizeof(float));
+                                bstree->insert(dist_id_pair, id, values, nearest_nodes_array);
+                          
+
+                               // bstree->insert(dist_id_pair, id, embeddings, nearest_nodes_array);
+                          
+                            }
+
+                            // bstree->insert(dist_id_pair, id, embeddings, nearest_nodes_array);
+                            // bstree->insert(dist_id_pair, id, &vector_quantized_ptr, nearest_nodes_array);
                         }
                     }
                 }
@@ -611,7 +717,7 @@ namespace qwery_aware
             }
             else
             {
-                // Fallback branch: no results found → write 10 dummy rows
+                // Fallback branch: no results found → write 10 dummy rows for testing
                 if (csv_file.is_open())
                 {
                     csv_file << "ID,Distance\n";
@@ -969,17 +1075,16 @@ namespace qwery_aware
                               char *filter_ids_map, size_t total_elements, size_t batch_num, size_t batch_start)
         {
             std::priority_queue<std::pair<dist_t, size_t>> top_candidates;
-             size_t local_index = query_num_batch - batch_start;
-
+            size_t local_index = query_num_batch - batch_start;
 
             for (tableint i = 0; i < total_vectors; i++)
             {
                 char *ep_data = this->getDataByInternalId(i);
 
-               
                 // apply batch-local filter
                 if (filter_ids_map[local_index * total_elements + i])
                 {
+
                     dist_t dist = this->fstdistfunc_(query_data, ep_data, this->dist_func_param_);
                     top_candidates.emplace(dist, i);
 
@@ -1225,7 +1330,7 @@ namespace qwery_aware
         test_search(const std::vector<float> &embeddings,
                     size_t k,
                     const std::string &attribute,
-                    float &score,
+                    std::pair<float, float> &max_distance_estimated_recall,
                     size_t &query_num,
                     size_t batch_start,
                     LinearRegression *linear_reg = nullptr)
@@ -1268,7 +1373,7 @@ namespace qwery_aware
             {
 
                 std::lock_guard<std::mutex> lock(attribute_mutex_map[attribute]);
-                bst_->search(embeddings, score, entrypoint_node, visited_nodes);
+                bst_->search(embeddings, max_distance_estimated_recall, entrypoint_node, visited_nodes);
             }
 
             if (!visited_nodes.empty())
@@ -1357,7 +1462,7 @@ namespace qwery_aware
                 // Cold start if no visited nodes found
                 handleColdStartInsertion(embeddings,
                                          k,
-                                         score,
+                                         max_distance_estimated_recall,
                                          query_num,
                                          batch_start,
                                          bst_,
@@ -1369,7 +1474,7 @@ namespace qwery_aware
         void search_parallel(const std::vector<float> &embeddings,
                              size_t k,
                              const std::string &attribute,
-                             float &score,
+                             std::pair<float, float> &max_distance_estimated_recall,
                              size_t &query_num,
                              size_t batch_start,
                              LinearRegression *linear_reg = nullptr)
@@ -1409,7 +1514,7 @@ namespace qwery_aware
 
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                bst_->search(embeddings, score, entrypoint_node, visited_nodes);
+                bst_->search(embeddings, max_distance_estimated_recall, entrypoint_node, visited_nodes);
             }
 
             if (!visited_nodes.empty())
@@ -1530,7 +1635,7 @@ namespace qwery_aware
             if (empty_attribute_check == false)
             {
                 // Cold start if no visited nodes found
-                handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg);
+                handleColdStartInsertion(embeddings, k, max_distance_estimated_recall, query_num, batch_start, bst_, attribute, linear_reg);
             }
         }
 
@@ -1591,24 +1696,393 @@ namespace qwery_aware
                                          char *filter_ids_map, size_t total_elements,
                                          size_t batch_num, size_t batch_start)
         {
-            size_t qualify_count = 0;
+            // size_t qualify_count = 0;
 
-            size_t local_index = query_num_batch - batch_start; // <-- FIXED
+            // size_t local_index = query_num_batch - batch_start; // <-- FIXED
+
+            // for (tableint i = 0; i < total_vectors; i++)
+            // {
+            //     if (filter_ids_map[local_index * total_elements + i]) // <-- FIXED
+            //     {
+            //         qualify_count++;
+            //     }
+            // }
+
+            // double selectivity =
+            //     (total_elements == 0) ? 0.0 : static_cast<double>(qualify_count) / static_cast<double>(total_elements);
+
+            // std::cout << "Q" << query_num_batch << ","
+            //           << std::fixed << std::setprecision(3)
+            //           << selectivity << std::endl; // <-- print selectivity
+
+            std::priority_queue<std::pair<dist_t, size_t>> top_candidates;
+            size_t local_index = query_num_batch - batch_start;
 
             for (tableint i = 0; i < total_vectors; i++)
             {
-                if (filter_ids_map[local_index * total_elements + i]) // <-- FIXED
+                char *ep_data = this->getDataByInternalId(i);
+
+                // apply batch-local filter
+                if (filter_ids_map[local_index * total_elements + i])
                 {
-                    qualify_count++;
+
+                    dist_t dist = this->fstdistfunc_(query_data, ep_data, this->dist_func_param_);
+                    top_candidates.emplace(dist, i);
+
+                    if (top_candidates.size() > k)
+                        top_candidates.pop();
                 }
             }
 
-            double selectivity =
-                (total_elements == 0) ? 0.0 : static_cast<double>(qualify_count) / static_cast<double>(total_elements);
+            // Extract results in ascending distance
+            std::vector<std::pair<dist_t, size_t>> results;
+            while (!top_candidates.empty())
+            {
+                results.push_back(top_candidates.top());
+                top_candidates.pop();
+            }
+            std::reverse(results.begin(), results.end());
 
-            std::cout << "Q" << query_num_batch << ","
-                      << std::fixed << std::setprecision(3)
-                      << selectivity << std::endl; // <-- print selectivity
+            // Write CSV with global query index
+            // create_directory_if_not_exists(constants["GROUND_TRUTH_FOLDER"] + "/" + batch_num);
+            std::string filename = constants["GROUND_TRUTH_FOLDER"] + "/Q" +
+                                   std::to_string(batch_start + local_index) + ".csv";
+            std::ofstream out(filename);
+            if (!out.is_open())
+            {
+                std::cerr << "❌ Failed to open file: " << filename << std::endl;
+                return;
+            }
+
+            out << "ID,Distance\n";
+            if (!results.empty())
+            {
+                for (const auto &p : results)
+                    out << p.second << "," << p.first << "\n";
+            }
+            else
+            {
+                // 🔹 Fallback: no results → write k rows of dummy values
+                for (size_t i = 0; i < k; i++)
+                    out << -1 << "," << std::numeric_limits<float>::max() << "\n";
+            }
+
+            out.close();
+            std::cout << "✅ Saved results for query " << (batch_start + local_index) << " to " << filename << std::endl;
+        }
+        // Vector reduction for computing
+        std::vector<float> reduce_vector_linear(const std::vector<float> &vec, int target_dim)
+        {
+            int orig_dim = vec.size();
+            std::vector<float> reduced(target_dim, 0.0f);
+            int chunk = orig_dim / target_dim;
+
+            for (int i = 0; i < target_dim; i++)
+            {
+                for (int j = 0; j < chunk; j++)
+                {
+                    reduced[i] += vec[i * chunk + j];
+                }
+                reduced[i] /= chunk; // average
+            }
+            return reduced;
+        }
+        // Testing the results without tree data structure and using the full scan of all items in the dataset.
+
+        // Insertion please
+        std::unordered_map<std::string, std::mutex> attribute_mutex_map_full;
+
+        std::unordered_map<std::string, std::vector<std::pair<std::vector<float>, std::unordered_set<size_t>>>> attribute_items_full_scan;
+        void searchingWithoutTree(const std::vector<float> &embeddings, size_t k, const std::string &attribute, float &score, size_t &query_num, size_t batch_start, LinearRegression *linear_reg = nullptr)
+        {
+
+            // int dim=20;
+            // std::vector<float> vector_quantized = reduce_vector_linear(embeddings, dim);
+            std::vector<std::pair<std::vector<float>, std::unordered_set<size_t>>> *item_list = nullptr;
+            bool empty_attribute_check = false;
+
+            // First, check without locking
+            auto it = attribute_items_full_scan.find(attribute); // It is find the attribute in the map
+            if (it != attribute_items_full_scan.end())
+            {
+                item_list = &it->second;
+                empty_attribute_check = true;
+            }
+            else
+            {
+                // Lock only if BST does not exist
+                std::lock_guard<std::mutex> lock(creation_mutex);
+                // Re-check inside lock
+                it = attribute_items_full_scan.find(attribute);
+                if (it == attribute_items_full_scan.end())
+                {
+                    auto result = attribute_items_full_scan.emplace(attribute, std::vector<std::pair<std::vector<float>, std::unordered_set<size_t>>>{});
+                    item_list = &result.first->second;
+                }
+                else
+                {
+                    item_list = &it->second;
+                }
+            }
+
+            // Step 1: Lock the BST for this attribute during search/insert
+
+            std::unordered_set<size_t> visited_nodes;
+            std::pair<float, size_t> entrypoint_node;
+
+            {
+                std::lock_guard<std::mutex> lock(attribute_mutex_map_full[attribute]);
+
+                constexpr size_t TOP_K = 10;
+
+                // max-heap: largest distance on top
+                std::priority_queue<
+                    std::pair<float, const std::unordered_set<size_t> *>>
+                    top_candidates;
+
+                if (!item_list->empty())
+                {
+                    for (const auto &item_id : *item_list)
+                    {
+                        float distance = this->fstdistfunc_(
+                            embeddings.data(),
+                            item_id.first.data(),
+                            this->dist_func_param_);
+
+                        if (top_candidates.size() < TOP_K)
+                        {
+                            top_candidates.emplace(distance, &item_id.second);
+                        }
+                        else if (distance < top_candidates.top().first)
+                        {
+                            top_candidates.pop();
+                            top_candidates.emplace(distance, &item_id.second);
+                        }
+                    }
+                }
+
+                // Collect visited nodes from top-10 nearest items
+                float best_distance = std::numeric_limits<float>::max();
+
+                while (!top_candidates.empty())
+                {
+                    const auto &[dist, node_set] = top_candidates.top();
+                    best_distance = std::min(best_distance, dist);
+
+                    // merge all nearest-node sets
+                    visited_nodes.insert(node_set->begin(), node_set->end());
+
+                    top_candidates.pop();
+                }
+
+                // Choose one entrypoint node (any from visited_nodes)
+                if (!visited_nodes.empty())
+                {
+                    entrypoint_node.first = best_distance;
+                    entrypoint_node.second = *visited_nodes.begin();
+                }
+            }
+
+            if (!visited_nodes.empty())
+            {
+
+                std::vector<size_t> touching_ids;
+                // auto top_candidates = searchBaseLayerTwoHop(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, false, touching_ids);
+
+                auto top_candidates = searchBaseLayer(entrypoint_node.second, embeddings.data(), this->ef_, query_num, &visited_nodes, true, touching_ids);
+                std::priority_queue<std::pair<dist_t, size_t>> result;
+
+                while (!top_candidates.empty())
+                {
+                    auto [dist, id] = top_candidates.top();
+                    top_candidates.pop();
+                    result.emplace(dist, static_cast<size_t>(id));
+                }
+
+                std::pair<float, size_t> dist_id_pair_;
+                std::vector<std::pair<dist_t, size_t>> tmp;
+                auto nearest_nodes_array = getNearestNodes(&result, k, tmp, &dist_id_pair_, true);
+
+                nearest_nodes_array.insert(
+                    nearest_nodes_array.end(),
+                    touching_ids.begin(),
+                    touching_ids.end());
+
+                if (!nearest_nodes_array.empty())
+                {
+
+                    std::vector<float> avg_dist_sel(2);
+                    int id = query_num + batch_start;
+
+                    // Count matches with ground truth
+                    const auto &gt_set = gts_ids[id];
+                    float match_count = 0.0f;
+                    for (const auto &p : tmp)
+                    {
+                        if (gt_set.count(p.second))
+                        {
+                            match_count++;
+                        }
+                    }
+
+                    // Compute recall
+                    match_count = match_count / k;
+
+                    // Fill the reusable vector for linear regression
+                    avg_dist_sel[0] = avg_dis_selectivity[id].first;
+                    avg_dist_sel[1] = avg_dis_selectivity[id].second;
+
+                    linear_reg->update(avg_dist_sel, match_count);
+                    dist_id_pair_.first += match_count;
+
+                    // Insert into BST under lock
+                    {
+                        std::lock_guard<std::mutex> lock(attribute_mutex_map_full[attribute]);
+                        item_list->push_back(std::make_pair(embeddings, std::unordered_set<size_t>(nearest_nodes_array.begin(), nearest_nodes_array.end())));
+                        // bst_->insert(dist_id_pair_, id, embeddings, nearest_nodes_array);
+                        //  bst_->insert(dist_id_pair_, id, vector_quantized, nearest_nodes_array);
+                    }
+                }
+
+                std::string dir =
+                    constants["RESULT_FOLDER"] + std::to_string(this->ef_);
+
+                create_directory_if_not_exists(dir);
+
+                std::string filename =
+                    dir + "/Q" + std::to_string(query_num + batch_start) + ".csv";
+
+                //  std::cout<<  batch_start + query_num << "," << tmp.size() << "\n";
+                std::ofstream csv_file(filename, std::ios::app);
+                if (csv_file.is_open())
+                {
+                    size_t considered = std::min(tmp.size(), k);
+                    csv_file << "ID,Distance\n";
+
+                    if (considered > 0)
+                    {
+                        // Write actual results
+                        for (size_t i = 0; i < considered; ++i)
+                        {
+                            csv_file << tmp[i].second << "," << tmp[i].first << "\n";
+                        }
+                    }
+                    else
+                    {
+                        // No results → write k dummy rows
+                        for (size_t i = 0; i < k; ++i)
+                        {
+                            csv_file << -1 << "," << std::numeric_limits<float>::max() << "\n";
+                        }
+                    }
+
+                    csv_file.flush();
+                    csv_file.close();
+                }
+                else
+                {
+                    std::cerr << "Error: could not open results.csv for writing\n";
+                }
+            }
+
+            if (empty_attribute_check == false)
+            {
+
+                // Cold start if no visited nodes found
+                // Include both implementation for pre filtering and simple ACORN based two hop search
+
+                // handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bst_, attribute, linear_reg, &vector_quantized);
+                handleColdStartInsertion_Full(embeddings, k, score, query_num, batch_start, item_list, attribute, linear_reg);
+            }
+        }
+
+        void handleColdStartInsertion_Full(const std::vector<float> &embeddings, size_t k, float &score, int query_num, size_t batch_start, std::vector<std::pair<std::vector<float>, std::unordered_set<size_t>>> *item_list, const std::string &attribute = "", LinearRegression *linear_reg = nullptr, std::vector<float> *vector_quantized_ptr = nullptr)
+        {
+
+            auto results = coldStartPreFiltering(embeddings.data(), this->ef_, k, query_num);
+
+            std::string dir =
+                constants["RESULT_FOLDER"] +
+                std::to_string(this->ef_);
+            create_directory_if_not_exists(dir);
+
+            std::string filename =
+                dir + "/Q" + std::to_string(query_num + batch_start) + ".csv";
+            std::ofstream csv_file(filename, std::ios::app);
+
+            if (results.size() > 0)
+            {
+                // Step 1: Find nearest nodes
+                std::pair<float, size_t> dist_id_pair;
+                std::vector<std::pair<dist_t, size_t>> tmp;
+                auto nearest_nodes_array =
+                    getNearestNodes(&results, k, tmp, &dist_id_pair);
+
+                if (nearest_nodes_array.size() > 0)
+                {
+                    std::vector<float> avg_dist_sel(2);
+                    int id = query_num + batch_start;
+
+                    // Step 2: Compute recall (ground truth comparison)
+                    const auto &gt_set = gts_ids[id];
+                    float match_count = 0.0f;
+                    for (const auto &p : tmp)
+                    {
+                        if (gt_set.count(p.second))
+                        {
+                            match_count++;
+                        }
+                    }
+                    match_count /= k;
+
+                    // Step 3: Update linear regression
+                    avg_dist_sel[0] = avg_dis_selectivity[id].first;
+                    avg_dist_sel[1] = avg_dis_selectivity[id].second;
+                    linear_reg->update(avg_dist_sel, match_count);
+                    dist_id_pair.first += match_count;
+
+                    // Step 4: Insert into BST
+                    {
+                        std::lock_guard<std::mutex> lock(attribute_mutex_map_full[attribute]);
+                        item_list->push_back(std::make_pair(embeddings, std::unordered_set<size_t>(nearest_nodes_array.begin(), nearest_nodes_array.end())));
+                    }
+                }
+
+                // Step 5: Write results to CSV
+                if (csv_file.is_open())
+                {
+                    size_t limit = std::min<size_t>(k, tmp.size());
+                    csv_file << "ID,Distance\n";
+                    for (size_t i = 0; i < limit; ++i)
+                    {
+                        csv_file << tmp[i].second << "," << tmp[i].first << "\n";
+                    }
+                    csv_file.flush();
+                    csv_file.close();
+                }
+                else
+                {
+                    std::cerr << "Error: could not open results.csv for writing\n";
+                }
+            }
+            else
+            {
+                // Fallback branch: no results found → write 10 dummy rows for testing
+                if (csv_file.is_open())
+                {
+                    csv_file << "ID,Distance\n";
+                    for (int i = 0; i < 10; i++)
+                    {
+                        csv_file << -1 << "," << std::numeric_limits<float>::max() << "\n";
+                    }
+                    csv_file.flush();
+                    csv_file.close();
+                }
+                else
+                {
+                    std::cerr << "Error: could not open results.csv for writing (empty case)\n";
+                }
+            }
         }
     };
 }

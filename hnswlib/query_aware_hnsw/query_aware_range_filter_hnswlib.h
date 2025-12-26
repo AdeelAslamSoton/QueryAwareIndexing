@@ -114,7 +114,7 @@ namespace qwery_aware
             }
         }
 
-        void search(const std::vector<float> &embeddings, size_t k, vector<int> &bins, float &score, size_t &query_num, size_t batch_start, LinearRegression *linear_reg = nullptr)
+        void search(const std::vector<float> &embeddings, size_t k, vector<int> &bins,  std::pair<float,float> &max_distance_estimated_recall, size_t &query_num, size_t batch_start, LinearRegression *linear_reg = nullptr)
         {
 
             std::vector<BST *> bst_list;
@@ -129,7 +129,7 @@ namespace qwery_aware
                     BST *bst = it->second.get();
                     if (bst)
                     {
-                        bst->search(embeddings, score, entrypoint_node, visited_nodes);
+                        bst->search(embeddings, max_distance_estimated_recall, entrypoint_node, visited_nodes);
                     }
                     if (visited_nodes.size() >= 100 || visited_nodes.size() == 0)
                         break;
@@ -250,7 +250,7 @@ namespace qwery_aware
             else
             {
 
-                handleColdStartInsertion(embeddings, k, score, query_num, batch_start, bins, linear_reg);
+                handleColdStartInsertion(embeddings, k,  max_distance_estimated_recall, query_num, batch_start, bins, linear_reg);
             }
         }
 
@@ -469,7 +469,7 @@ namespace qwery_aware
          * @param query_num   Index of the query.
          */
 
-        void handleColdStartInsertion(const std::vector<float> &embeddings, size_t k, float &score, int query_num, size_t batch_start, std::vector<int> &bins, LinearRegression *linear_reg = nullptr)
+        void handleColdStartInsertion(const std::vector<float> &embeddings, size_t k,  std::pair<float, float> &max_distance_estimated_recall, int query_num, size_t batch_start, std::vector<int> &bins, LinearRegression *linear_reg = nullptr)
         {
 
             auto result = this->searchKnn(embeddings.data(), k);

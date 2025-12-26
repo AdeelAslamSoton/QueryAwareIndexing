@@ -18,7 +18,7 @@ pair<vector<vector<float>>, vector<string>> reading_files(const string &file_pat
 vector<std::string> reading_files_attributes(const string &file_path);
 vector<string> splitString(const string &str, char delimiter);
 vector<float> splitToFloat(const string &str, char delimiter);
-
+size_t getRandomIndex(size_t max_elements);
 bool isNullOrEmpty(const string &str);
 string trim(const string &s);
 vector<string> split_and_clean(const string &s);
@@ -319,7 +319,7 @@ int main()
 
     if (read_index)
     {
-        std::cout << "Start" << std::endl;
+        // std::cout << "Start" << std::endl;
 
         auto [embeddings, string_ids] = reading_files(constants["DATASET_FILE"], dim, false);
         int max_elements = embeddings.size();
@@ -358,22 +358,22 @@ int main()
         size_t elements = meta_data_attributes_cleaned.size();
 
         std::vector<std::pair<float, float>> avg_dis_selectivity = readDistanceSelectivity(constants["DISTANCE_SELECTIVITY"]);
-        
 
         qwery_aware::QweryAwareHNSW<float> *alg_query_aware = new qwery_aware::QweryAwareHNSW<float>(&space, elements, gts_ids, avg_dis_selectivity, constants);
 
         alg_query_aware->loadIndex(constants["INDEX_PATH"], &space);
-        std::cout << "Index Loaded  " << elements << std::endl;
+        std::cout << "Index Loaded  " << gts_ids.size() << std::endl;
         // Searching
 
         // Step 3: Run searches for this batch
-        std::vector<size_t> efs_array = {20, 80, 140, 200, 260, 320, 380, 440, 500, 560, 700, 900, 1100, 1300, 1500};
-        // creating models
+      //  std::vector<size_t> efs_array = {20, 80, 140, 200, 260, 320, 380, 440, 500, 560, 700, 900, 1100, 1300, 1500};
+         std::vector<size_t> efs_array = {560};
+        //  creating models
         std::vector<std::unique_ptr<LinearRegression>> models;
 
         for (size_t i = 0; i < efs_array.size(); i++)
         {
-            models.push_back(std::unique_ptr<LinearRegression>(new LinearRegression(2, 0.001)));
+            models.push_back(std::unique_ptr<LinearRegression>(new LinearRegression(2, 0.15f)));
         }
 
         std::cout << "Queries Loaded" << queries.second.size() << std::endl;
@@ -383,10 +383,30 @@ int main()
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
         size_t total_elements = alg_query_aware->max_elements_;
-        size_t batch_size = 200;
+        size_t batch_size = 1000;
 
         size_t num_batches = (queries.first.size() + batch_size - 1) / batch_size;
         int counter = 0;
+
+        // Distance Finding
+        float maximumDistance = std::numeric_limits<float>::lowest();
+
+        for (int i = 0; i < 30; i++)
+        {
+            size_t random_index = getRandomIndex(queries.first.size());
+            alg_query_aware->setEf(560);
+
+            auto results = alg_query_aware->searchKnn(
+                queries.first[random_index].data(), 10);
+
+            if (!results.empty())
+            {
+                float currentMax = results.top().first; // largest for this query
+                maximumDistance = std::max(maximumDistance, currentMax);
+            }
+        }
+
+        // Find largest distance for normalization
 
         for (size_t b = 0; b < num_batches; b++)
         {
@@ -452,18 +472,20 @@ int main()
                 saveFilterMap(filter_ids_map, filter_file);
                 std::cout << "💾 Saved filter map for batch " << b + 1 << " to cache" << std::endl;
             }
-            
+
             //  std::cout << "Predicate Set alignment (batch " << b + 1 << ")" << std::endl;
 
             // Step 2: Apply predicate filter
             alg_query_aware->predicateCondition(filter_ids_map.data());
+            
 
+            // Step 3: Run searches for this batch
             for (size_t i = 0; i < efs_array.size(); i++)
             {
                 alg_query_aware->setEf(efs_array[i]);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 // loop
-                ParallelFor(0, end - start, 40, [&](size_t row_batch, size_t threadId)
+                ParallelFor(0, end - start, 1, [&](size_t row_batch, size_t threadId)
                             {
                                 size_t global_query_index = start + row_batch;
                                 const std::vector<float> &emb = queries.first[global_query_index];
@@ -471,9 +493,13 @@ int main()
                                 std::vector<float> new_query_reg = {avg_dis_selectivity[global_query_index].first,
                                                                     avg_dis_selectivity[global_query_index].second};
 
-                                float score = models[i]->predict(new_query_reg);
+                                //float score = models[i]->predict(new_query_reg);
+                                float score = 0.0f;
+                                
 
-                               alg_query_aware->search(emb, k, queries.second[global_query_index], score, row_batch, start, models[i].get());
+                                std::pair<float, float> max_distance_and_normalized_score=std::make_pair(2.8f, score);
+                                alg_query_aware->search(emb, k, queries.second[global_query_index], max_distance_and_normalized_score, row_batch, start, models[i].get());
+                                //  alg_query_aware->searchingWithoutTree(emb, k, queries.second[global_query_index], score, row_batch, start, models[i].get());
 
                                 // alg_query_aware->groundTruthBatchSelectivity(emb.data(), k, global_query_index,
                                 //                                   filter_ids_map.data(), total_elements,
@@ -485,9 +511,9 @@ int main()
                 std::cout << "Finished batch " << start
                           << " EFS: " << efs_array[i]
                           << " | Time: " << duration_ms << " ms" << std::endl;
-                       //   break;
-                         
+                   // break;      
             }
+          // break;
         }
 
         // Final cleanup
@@ -499,6 +525,7 @@ int main()
 // Read embeddings from CSV-like file for Point predicate
 pair<vector<vector<float>>, vector<string>> reading_files(const string &file_path, int &dim, bool queries = false)
 {
+    cout << "Reading file: " << file_path << endl;
     ifstream file(file_path);
     vector<vector<float>> total_embeddings;
     vector<string> attributes; // store string IDs
@@ -513,14 +540,16 @@ pair<vector<vector<float>>, vector<string>> reading_files(const string &file_pat
         if (!queries)
         {
 
+            // getline(ss, skip, ';');
             getline(ss, embedding, ';');
             getline(ss, attribute, ';');
+            //  getline(ss, embedding, ';');
         }
         else
         {
-            getline(ss, skip, ';');
-            getline(ss, attribute, ';');
+            // getline(ss, skip, ';');
             getline(ss, embedding, ';');
+            getline(ss, attribute, ';');
         }
         if (!isNullOrEmpty(embedding))
         {
@@ -662,8 +691,8 @@ vector<vector<string>> reading_files_attributes_and_cleaning(const string &file_
         stringstream ss(line);
         string id, embedding, attribute;
 
-        // Read required columns
-        //  getline(ss, embedding, ';'); // first column
+        // Read required columnss
+        getline(ss, embedding, ';'); // first column
         getline(ss, attribute, ';'); // attribute column
 
         // Split and clean attributes
@@ -674,4 +703,11 @@ vector<vector<string>> reading_files_attributes_and_cleaning(const string &file_
     }
 
     return attributes_all;
+}
+
+size_t getRandomIndex(size_t max_elements)
+{
+    static std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<size_t> dist(0, max_elements - 1);
+    return dist(gen);
 }

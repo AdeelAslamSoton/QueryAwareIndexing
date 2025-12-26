@@ -13,7 +13,7 @@ private:
 
 public:
     // Constructor
-    LinearRegression(int num_features, float learning_rate = 0.01)
+    LinearRegression(int num_features, float learning_rate = 0.01f)
     {
         theta = vector<float>(num_features + 1, 0.0); // +1 for bias
         alpha = learning_rate;

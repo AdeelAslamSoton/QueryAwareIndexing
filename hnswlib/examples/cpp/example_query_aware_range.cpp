@@ -443,11 +443,13 @@ int main()
 
                                 if (avg_dis_selectivity[global_query_index].second > 0.30)
                                 {
-                                    alg_query_aware->search(emb, k, queries_bin[row_batch], score, row_batch, start, models[i].get());
+                                    std::pair<float, float> max_distance_estimated_recall(0.0f, score);
+                                    alg_query_aware->search(emb, k, queries_bin[row_batch], max_distance_estimated_recall, row_batch, start, models[i].get());
                                 }
                                 else
                                 {
-                                    alg_query_aware->handleColdStartInsertion(emb, k, score, row_batch, start, queries_bin[row_batch], models[i].get());
+                                       std::pair<float, float> max_distance_estimated_recall(0.0f, score);
+                                    alg_query_aware->handleColdStartInsertion(emb, k, max_distance_estimated_recall, row_batch, start, queries_bin[row_batch], models[i].get());
                                 } });
 
                 // alg_query_aware->search_parallel(emb, k, attribute, score, row_batch, start, models[i].get());

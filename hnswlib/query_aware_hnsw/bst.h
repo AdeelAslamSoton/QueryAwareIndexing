@@ -13,13 +13,13 @@ private:
         std::pair<float, size_t> smallest_score_id;
         // float score;                           // cumulative score
         // size_t smallest_score_id;
-        size_t node_id;                           // unique node ID
+        size_t node_id;                        // unique node ID
         std::vector<size_t> nearest_nodes_ids; // nearest neighbors
         std::vector<float> embeddings;         // node embeddings
         std::unique_ptr<Node> left;
         std::unique_ptr<Node> right;
 
-        Node(std::pair<float, size_t> &smallest_id_distance_pair , size_t id,
+        Node(std::pair<float, size_t> &smallest_id_distance_pair, size_t id,
              const std::vector<float> &node_embeddings,
              const std::vector<size_t> &nearest_nodes)
             : smallest_score_id(smallest_id_distance_pair), node_id(id),
@@ -34,15 +34,42 @@ private:
     int testCounterNodes;
 
 public:
-    size_t next_tree_id;  // new: reference to next tree in chain
+    size_t next_tree_id; // new: reference to next tree in chain
     BST(hnswlib::HierarchicalNSW<float> *hnsw)
         : root(nullptr), total_item(0), testCounterNodes(0), hnsw_BST(hnsw), next_tree_id(0) {}
+
+    BST(int dim)
+        : root(nullptr), total_item(0), testCounterNodes(0), next_tree_id(0)
+    {
+
+        hnswlib::L2Space space(dim);
+        hnsw_BST = new hnswlib::HierarchicalNSW<float>(&space, 2000);
+    }
 
     int getTotalItems() const { return total_item; }
 
     float computeDistanceWithHNSW(const std::vector<float> &node_embedding,
                                   const std::vector<float> &key_embedding) const
     {
+        // if (node_embedding.size() != key_embedding.size())
+        // {
+        //     std::cerr << "Error: vectors must have same size!" << std::endl;
+        //     return -1;
+        // }
+
+        // float sum = 0.0f;
+        // for (size_t i = 0; i < node_embedding.size(); i++)
+        // {
+        //     float diff = node_embedding[i] - key_embedding[i];
+        //     sum += diff * diff;
+        // }
+
+        // // std::cout << "Sum of squared differences: " << sum << std::endl;
+
+        // float dist = std::sqrt(sum);
+        // std::cout << "L2 distance: " << dist << std::endl;
+
+        //   std::cout<<"Computing distance between node and key embedding"<<node_embedding.size()<<"END ...."<<key_embedding.size()<< <<std::endl;
         return hnsw_BST->fstdistfunc_(node_embedding.data(),
                                       key_embedding.data(),
                                       hnsw_BST->dist_func_param_);
@@ -54,12 +81,10 @@ public:
                  const std::vector<size_t> &nearest_nodes)
     {
 
-       
-
-       // float cumulative_score = base_score; // It include recall/selectivity + closet distance
+        // float cumulative_score = base_score; // It include recall/selectivity + closet distance
         if (!root)
         {
-            root.reset(new Node(smallest_score_id_pair,id, node_embeddings, nearest_nodes));
+            root.reset(new Node(smallest_score_id_pair, id, node_embeddings, nearest_nodes));
 
             total_item++;
             return root.get();
@@ -106,7 +131,6 @@ public:
     }
 
     // Iterative search/floor
-    
 
     void printInOrder() const
     {
@@ -130,53 +154,68 @@ public:
         }
     }
 
-     void search(const std::vector<float> &query_embedding,
-            float &base_score,
-            std::pair<float, size_t> &smallest_score_id_,
-            std::unordered_set<size_t> &visited_nodes)
-{
-    if (!root)
-        return;
-
-    Node *curr = root.get();
-    float cumulative_dist = base_score;          // start with base_score
-    float best_dist = std::numeric_limits<float>::max();
-    size_t best_id = 0;
-
-    while (curr)
+    void search(const std::vector<float> &query_embedding,
+                std::pair<float, float> &max_distance_estimated_recall,
+                std::pair<float, size_t> &smallest_score_id_,
+                std::unordered_set<size_t> &visited_nodes)
     {
-        visited_nodes.insert(curr->nearest_nodes_ids.begin(),
-                             curr->nearest_nodes_ids.end());
+        if (!root)
+            return;
 
-        // Distance to current node
-        float dist = computeDistanceWithHNSW(query_embedding, curr->embeddings);
+        Node *curr = root.get();
+        // float cumulative_dist = base_score;          // start with base_score
+        float best_dist = std::numeric_limits<float>::max();
+        size_t best_id = 0;
 
-        // Update cumulative distance along this path
-       //cumulative_dist += dist;
-       float node_score = base_score + dist;
-
-        // Update best node if cumulative distance is smaller
-        if (node_score < best_dist)
+        while (curr)
         {
-            best_dist = node_score;
-            best_id = curr->smallest_score_id.second;
+            visited_nodes.insert(curr->nearest_nodes_ids.begin(),
+                                 curr->nearest_nodes_ids.end());
+
+            // Distance to current node
+            float dist = computeDistanceWithHNSW(query_embedding, curr->embeddings);
+            // Ensure max_distance_estimated_recall.first is positive to avoid division by zero
+            float max_dist = std::max(max_distance_estimated_recall.first, 1e-6f);
+
+            // Normalize distance so that closer nodes give higher values
+            float normalized_dist = 1.0f - (dist / max_dist);
+
+            // Clamp to [0,1] for safety
+            normalized_dist = std::max(0.0f, std::min(normalized_dist, 1.0f));
+
+
+            // Now you can combine with recall (higher is better)
+            float recall_score = max_distance_estimated_recall.second; // assumed in [0,1]
+            float node_score = 0.5f * recall_score + 0.5f * normalized_dist;
+
+            // std::cout << "Node ID: " << curr->node_id
+            //           << " | Dist: " << dist
+            //           << " | Recall: " << recall_score
+            //           << " | Normalized Dist: " << normalized_dist
+            //           << " | Score: " << node_score << std::endl;
+            // Update best node if cumulative distance is smaller
+            if (node_score < best_dist)
+            {
+                best_dist = node_score;
+                best_id = curr->smallest_score_id.second;
+            }
+
+            // Decide traversal using cumulative distance vs node’s smallest_score_id
+            // You can either compare using cumulative_dist or just dist for BST ordering
+            if (node_score < curr->smallest_score_id.first)
+            {
+                curr = curr->left.get();
+            }
+            else if (node_score > curr->smallest_score_id.first)
+            {
+                curr = curr->right.get();
+            }
+            else
+                break;
         }
 
-        // Decide traversal using cumulative distance vs node’s smallest_score_id
-        // You can either compare using cumulative_dist or just dist for BST ordering
-        if (node_score < curr->smallest_score_id.first)
-            curr = curr->left.get();
-        else if (node_score > curr->smallest_score_id.first)
-            curr = curr->right.get();
-        else
-            break;
+        smallest_score_id_ = {best_dist, best_id};
     }
-
-    smallest_score_id_ = {best_dist, best_id};
-}
-
-
-
 
 private:
     void printTree(const Node *node, const std::string &prefix, bool isLeft) const
